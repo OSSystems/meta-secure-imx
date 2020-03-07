@@ -1,0 +1,140 @@
+From 3352572e070ab29cf749f7aa1efae410afc1d2c2 Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Mon, 7 May 2018 13:41:11 +0200
+Subject: [PATCH 09/13] ubifs: allow usage of symmetric key type for UBIFS
+ encryption
+
+Using the global_keyring mount option UBIFS creates a dedicated key ring
+which is linked into root's user keyring. With global_keyring enabled,
+UBIFS encryption will search this new keyring for encryption keys of
+type symmetric.
+
+Signed-off-by: David Oberhollenzer <david.oberhollenzer@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Signed-off-by: David Gstir <david@sigma-star.at>
+---
+ fs/ubifs/Kconfig  |  9 +++++++++
+ fs/ubifs/crypto.c | 25 +++++++++++++++++++++++++
+ fs/ubifs/super.c  |  8 --------
+ 3 files changed, 34 insertions(+), 8 deletions(-)
+
+diff --git a/fs/ubifs/Kconfig b/fs/ubifs/Kconfig
+index 69932bcfa920..05c23c23208d 100644
+--- a/fs/ubifs/Kconfig
++++ b/fs/ubifs/Kconfig
+@@ -72,6 +72,15 @@ config UBIFS_FS_XATTR
+ 
+ 	  If unsure, say Y.
+ 
++config UBIFS_FS_ENCRYPTION_SYM_KEYS
++	bool "Use symmetric keys for UBIFS encryption"
++	depends on UBIFS_FS && BLOCK && FS_ENCRYPTION && SYMMETRIC_KEYS
++	default n
++	help
++	  Use symmetric keys for storing UBIFS encryption keys. This enables hardware-bound
++	  keys which can safely be stored on a persitent medium and are encrypted and
++	  authenticated by a hardware engine like CAAM.
++
+ config UBIFS_FS_SECURITY
+ 	bool "UBIFS Security Labels"
+ 	depends on UBIFS_FS_XATTR
+diff --git a/fs/ubifs/crypto.c b/fs/ubifs/crypto.c
+index b545add1aa3b..8f889214cd4c 100644
+--- a/fs/ubifs/crypto.c
++++ b/fs/ubifs/crypto.c
+@@ -2,6 +2,10 @@
+ #include <linux/key-type.h>
+ #include <linux/keyctl.h>
+ 
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++#include <keys/symmetric-subtype.h>
++#endif
++
+ #include "ubifs.h"
+ 
+ static struct cred *kr_cred;
+@@ -160,6 +164,23 @@ void ubifs_fscrypt_exit(void)
+ 	kr_cred = NULL;
+ }
+ 
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++static struct fscrypt_key *ubifs_get_key_payload(struct key *key)
++{
++	int ret;
++	const u8 *payload;
++	unsigned int payload_len;
++
++	ret = symmetric_key_keyref(key, &payload, &payload_len);
++	if (ret) {
++		pr_err("ubifs: failed to get encryption key payload: %i\n", ret);
++		return ERR_PTR(ret);
++	}
++
++	return (struct fscrypt_key *)payload;
++}
++#endif /* CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS */
++
+ const struct fscrypt_operations ubifs_crypt_operations = {
+ 	.flags			= FS_CFLG_OWN_PAGES,
+ 	.key_prefix		= "ubifs:",
+@@ -167,4 +188,8 @@ const struct fscrypt_operations ubifs_crypt_operations = {
+ 	.set_context		= ubifs_crypt_set_context,
+ 	.empty_dir		= ubifs_crypt_empty_dir,
+ 	.max_namelen		= UBIFS_MAX_NLEN,
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++	.key_type		= &key_type_symmetric,
++	.get_key_payload	= ubifs_get_key_payload,
++#endif
+ };
+diff --git a/fs/ubifs/super.c b/fs/ubifs/super.c
+index 8638a3598ffd..7192b779bb66 100644
+--- a/fs/ubifs/super.c
++++ b/fs/ubifs/super.c
+@@ -442,10 +442,8 @@ static int ubifs_show_options(struct seq_file *s, struct dentry *root)
+ 	seq_printf(s, ",assert=%s", ubifs_assert_action_name(c));
+ 	seq_printf(s, ",ubi=%d,vol=%d", c->vi.ubi_num, c->vi.vol_id);
+ 
+-#ifdef CONFIG_UBIFS_FS_ENCRYPTION
+ 	if (c->mount_opts.global_keyring == 1)
+ 		seq_puts(s, ",global_keyring");
+-#endif
+ 
+ 	return 0;
+ }
+@@ -1110,11 +1108,9 @@ static int ubifs_parse_options(struct ubifs_info *c, char *options,
+ 			break;
+ 		case Opt_ignore:
+ 			break;
+-#ifdef CONFIG_UBIFS_FS_ENCRYPTION
+ 		case Opt_global_keyring:
+ 			c->mount_opts.global_keyring = 1;
+ 			break;
+-#endif
+ 		default:
+ 		{
+ 			unsigned long flag;
+@@ -1655,10 +1651,8 @@ static void ubifs_umount(struct ubifs_info *c)
+ 	vfree(c->sbuf);
+ 	kfree(c->bottom_up_buf);
+ 	kfree(c->sup_node);
+-#ifdef CONFIG_UBIFS_FS_ENCRYPTION
+ 	if (c->mount_opts.global_keyring)
+ 		kfree(c->vfs_sb->s_cop);
+-#endif
+ 	ubifs_debugging_exit(c);
+ }
+ 
+@@ -2199,10 +2193,8 @@ static int ubifs_fill_super(struct super_block *sb, void *data, int silent)
+ 	       if (err)
+ 		       goto out_free;
+ 	}
+-	sb->s_cop = cop;
+ 	fscrypt_set_ops(sb, cop);
+ 
+-
+ 	mutex_lock(&c->umount_mutex);
+ 	err = mount_ubifs(c);
+ 	if (err) {
+-- 
+2.24.1
+

@@ -1,0 +1,230 @@
+From 9f526e7cf47951d6ee1a43d079fbb0d60e854d4d Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Thu, 24 Jan 2019 22:21:43 +0100
+Subject: [PATCH 04/13] dm-crypt: Add a global keyring for symmetric keys
+
+This global keyring allows us to use a key provided by CAAM.
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ drivers/md/Kconfig    |   1 +
+ drivers/md/dm-crypt.c | 144 +++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 129 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/md/Kconfig b/drivers/md/Kconfig
+index aa98953f4462..d2d816279a51 100644
+--- a/drivers/md/Kconfig
++++ b/drivers/md/Kconfig
+@@ -269,6 +269,7 @@ config DM_UNSTRIPED
+ config DM_CRYPT
+ 	tristate "Crypt target support"
+ 	depends on BLK_DEV_DM
++	depends on m
+ 	select CRYPTO
+ 	select CRYPTO_CBC
+ 	select CRYPTO_ESSIV
+diff --git a/drivers/md/dm-crypt.c b/drivers/md/dm-crypt.c
+index 492bbe0584d9..8f81e21ebf75 100644
+--- a/drivers/md/dm-crypt.c
++++ b/drivers/md/dm-crypt.c
+@@ -35,6 +35,10 @@
+ #include <crypto/authenc.h>
+ #include <linux/rtnetlink.h> /* for struct rtattr and RTA macros only */
+ #include <keys/user-type.h>
++#include <keys/symmetric-type.h>
++#include <keys/symmetric-subtype.h>
++#include <linux/key-type.h>
++#include <linux/keyctl.h>
+ 
+ #include <linux/device-mapper.h>
+ 
+@@ -218,6 +222,10 @@ static volatile unsigned long dm_crypt_pages_per_client;
+ #define DM_CRYPT_MEMORY_PERCENT			2
+ #define DM_CRYPT_MIN_PAGES_PER_CLIENT		(BIO_MAX_PAGES * 16)
+ 
++
++static struct cred *kr_cred;
++static DEFINE_MUTEX(kr_cred_lock);
++
+ static void clone_init(struct dm_crypt_io *, struct bio *);
+ static void kcryptd_queue_crypt(struct dm_crypt_io *io);
+ static struct scatterlist *crypt_get_sg_data(struct crypt_config *cc,
+@@ -1905,12 +1913,83 @@ static bool contains_whitespace(const char *str)
+ 	return false;
+ }
+ 
++static struct cred *alloc_keyring_cred(void)
++{
++	struct cred *cred;
++	struct key *keyring;
++	struct key *root_keyring;
++
++	cred = prepare_kernel_cred(NULL);
++	if (!cred)
++		return ERR_PTR(-ENOMEM);
++
++	/* We link the new keyring into root's UID keyring to allow root to
++	 * manage the keys therein via keyctl.
++	 */
++	root_keyring = request_key(&key_type_keyring, "_uid.0", NULL);
++	if (IS_ERR(root_keyring)) {
++		put_cred(cred);
++		cred = ERR_CAST(root_keyring);
++		goto err_cred;
++	}
++
++	keyring = keyring_alloc(".dm_crypt", GLOBAL_ROOT_UID,
++				GLOBAL_ROOT_GID, cred,
++				(KEY_POS_ALL & ~KEY_POS_SETATTR) |
++				(KEY_USR_ALL & ~KEY_POS_SETATTR),
++				0, NULL, root_keyring);
++	if (IS_ERR(keyring)) {
++		put_cred(cred);
++		cred = ERR_CAST(keyring);
++		goto err_rkr;
++	}
++
++	set_bit(KEY_FLAG_ROOT_CAN_CLEAR, &keyring->flags);
++	cred->thread_keyring = keyring;
++	cred->jit_keyring = KEY_REQKEY_DEFL_THREAD_KEYRING;
++
++	DMINFO("added keyring .dm_crypt with serial: %d",
++		key_serial(keyring));
++
++	return cred;
++
++err_rkr:
++	key_put(root_keyring);
++err_cred:
++	return cred;
++}
++
++static int setup_global_keyring(void)
++{
++	int ret = 0;
++	struct cred *cred;
++
++	if (kr_cred == NULL) {
++		mutex_lock(&kr_cred_lock);
++		if (kr_cred == NULL) {
++			cred = alloc_keyring_cred();
++			if (IS_ERR(cred)) {
++				ret = PTR_ERR(cred);
++				mutex_unlock(&kr_cred_lock);
++				DMERR("failed to initialize keyring .dm_crypt: %i", ret);
++				goto out;
++			}
++			kr_cred = cred;
++		}
++		mutex_unlock(&kr_cred_lock);
++	}
++
++out:
++	return ret;
++}
++
+ static int crypt_set_keyring_key(struct crypt_config *cc, const char *key_string)
+ {
+ 	char *new_key_string, *key_desc;
+ 	int ret;
+ 	struct key *key;
+ 	const struct user_key_payload *ukp;
++	bool global_symmetric_key = false;
+ 
+ 	/*
+ 	 * Reject key_string with whitespace. dm core currently lacks code for
+@@ -1937,28 +2016,56 @@ static int crypt_set_keyring_key(struct crypt_config *cc, const char *key_string
+ 	key = request_key(key_string[0] == 'l' ? &key_type_logon : &key_type_user,
+ 			  key_desc + 1, NULL);
+ 	if (IS_ERR(key)) {
+-		kzfree(new_key_string);
+-		return PTR_ERR(key);
++		key = request_key(&key_type_symmetric, key_desc + 1, NULL);
++		if (IS_ERR(key)) {
++			kzfree(new_key_string);
++			return PTR_ERR(key);
++		}
++		global_symmetric_key = true;
+ 	}
+ 
+ 	down_read(&key->sem);
+ 
+-	ukp = user_key_payload_locked(key);
+-	if (!ukp) {
+-		up_read(&key->sem);
+-		key_put(key);
+-		kzfree(new_key_string);
+-		return -EKEYREVOKED;
+-	}
++	if (!global_symmetric_key) {
++		ukp = user_key_payload_locked(key);
++		if (!ukp) {
++			up_read(&key->sem);
++			key_put(key);
++			kzfree(new_key_string);
++			return -EKEYREVOKED;
++		}
+ 
+-	if (cc->key_size != ukp->datalen) {
+-		up_read(&key->sem);
+-		key_put(key);
+-		kzfree(new_key_string);
+-		return -EINVAL;
+-	}
++		if (cc->key_size != ukp->datalen) {
++			up_read(&key->sem);
++			key_put(key);
++			kzfree(new_key_string);
++			return -EINVAL;
++		}
++
++		memcpy(cc->key, ukp->data, cc->key_size);
++	} else {
++		const u8 *payload;
++		unsigned int payload_len;
++
++		ret = symmetric_key_keyref(key, &payload, &payload_len);
++		if (ret) {
++			DMERR("Failed to symmetric_key_keyref: %i", ret);
++			up_read(&key->sem);
++			key_put(key);
++			kzfree(new_key_string);
++			return -EINVAL;
++		}
++
++		if (cc->key_size != payload_len) {
++			DMERR("Symmetric key payload len mismatch: %i vs %i", cc->key_size, payload_len);
++			up_read(&key->sem);
++			key_put(key);
++			kzfree(new_key_string);
++			return -EINVAL;
++		}
+ 
+-	memcpy(cc->key, ukp->data, cc->key_size);
++		memcpy(cc->key, payload, payload_len);
++	}
+ 
+ 	up_read(&key->sem);
+ 	key_put(key);
+@@ -2983,6 +3090,10 @@ static int __init dm_crypt_init(void)
+ {
+ 	int r;
+ 
++	r = setup_global_keyring();
++	if (r)
++		return -EINVAL;
++
+ 	r = dm_register_target(&crypt_target);
+ 	if (r < 0)
+ 		DMERR("register failed %d", r);
+@@ -2993,6 +3104,7 @@ static int __init dm_crypt_init(void)
+ static void __exit dm_crypt_exit(void)
+ {
+ 	dm_unregister_target(&crypt_target);
++	put_cred(kr_cred);
+ }
+ 
+ module_init(dm_crypt_init);
+-- 
+2.24.1
+

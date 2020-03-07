@@ -1,0 +1,263 @@
+ tar -xvf cst-3.0.1.tar.gz 
+ cd cst-3.0.1/keys
+ head /dev/urandom | tr -dc 0-9 | head -c 8 ; echo ''
+ vi serial
+ head /dev/urandom | tr -dc A-Za-z0-9 | head -c 10 ; echo ''
+ vi key_pass.txt # copy twice
+ ./hab4_pki_tree.sh 
+ cd ../crts/
+ ../linux64/bin/srktool -h 4 -t SRK_1_2_3_4_table.bin -e SRK_1_2_3_4_fuse.bin -d sha256 -c ./SRK1_sha256_secp521r1_v3_ca_crt.pem,./SRK2_sha256_secp521r1_v3_ca_crt.pem,./SRK3_sha256_secp521r1_v3_ca_crt.pem,./SRK4_sha256_secp521r1_v3_ca_crt.pem
+ hexdump -C SRK_1_2_3_4_fuse.bin
+ hexdump -e '/4 "0x"' -e '/4 "%X""\n"' < SRK_1_2_3_4_fuse.bin
+
+Used sample:
+===========
+$ head /dev/urandom | tr -dc 0-9 | head -c 8 ; echo ''
+22944959
+vi serial
+$ head /dev/urandom | tr -dc A-Za-z0-9 | head -c 10 ; echo ''
+V7rFrj6FNz
+$ vi key_pass.txt
+$ ./hab4_pki_tree.sh 
+
+    +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    This script is a part of the Code signing tools for Freescale's
+    High Assurance Boot.  It generates a basic PKI tree.  The PKI
+    tree consists of one or more Super Root Keys (SRK), with each
+    SRK having two subordinate keys: 
+        + a Command Sequence File (CSF) key 
+        + Image key. 
+    Additional keys can be added to the PKI tree but a separate 
+    script is available for this.  This this script assumes openssl
+    is installed on your system and is included in your search 
+    path.  Finally, the private keys generated are password 
+    protectedwith the password provided by the file key_pass.txt.
+    The format of the file is the password repeated twice:
+        my_password
+        my_password
+    All private keys in the PKI tree are in PKCS #8 format will be
+    protected by the same password.
+
+    +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Do you want to use an existing CA key (y/n)?: n
+Do you want to use Elliptic Curve Cryptography (y/n)?: y
+Enter length for elliptic curve to be used for PKI tree:
+Possible values p256, p384, p521:  p521
+Enter PKI tree duration (years): 25
+How many Super Root Keys should be generated? 4
+Do you want the SRK certificates to have the CA flag set? (y/n)?: y
+
++++++++++++++++++++++++++++++++++++++
++ Generating CA key and certificate +
++++++++++++++++++++++++++++++++++++++
+
+Generating an EC private key
+writing new private key to 'temp_ca.pem'
+-----
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating SRK key and certificate 1 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'SRK1_sha256_secp521r1_v3_ca'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating CSF key and certificate 1 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'CSF1_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating IMG key and certificate 1 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'IMG1_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating SRK key and certificate 2 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'SRK2_sha256_secp521r1_v3_ca'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating CSF key and certificate 2 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'CSF2_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating IMG key and certificate 2 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'IMG2_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating SRK key and certificate 3 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'SRK3_sha256_secp521r1_v3_ca'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating CSF key and certificate 3 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'CSF3_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating IMG key and certificate 3 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'IMG3_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating SRK key and certificate 4 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'SRK4_sha256_secp521r1_v3_ca'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating CSF key and certificate 4 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'CSF4_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+Data Base Updated
+
+++++++++++++++++++++++++++++++++++++++++
++ Generating IMG key and certificate 4 +
+++++++++++++++++++++++++++++++++++++++++
+
+read EC key
+writing EC key
+Using configuration from ../ca/openssl.cnf
+Check that the request matches the signature
+Signature ok
+The Subject's Distinguished Name is as follows
+commonName            :ASN.1 12:'IMG4_1_sha256_secp521r1_v3_usr'
+Certificate is to be certified until Dec 27 19:08:15 2043 GMT (9125 days)
+
+Write out database with 1 new entries
+
+$ cd ../crts
+$ ../linux64/bin/srktool -h 4 -t SRK_1_2_3_4_table.bin -e SRK_1_2_3_4_fuse.bin -d sha256 -c ./SRK1_sha256_secp521r1_v3_ca_crt.pem,./SRK2_sha256_secp521r1_v3_ca_crt.pem,./SRK3_sha256_secp521r1_v3_ca_crt.pem,./SRK4_sha256_secp521r1_v3_ca_crt.pem
+$ hexdump -C SRK_1_2_3_4_fuse.bin
+00000000  67 de 76 fc f5 6a 78 38  42 ce 7b 5b e2 ba e1 05  |g.v..jx8B.{[....|
+00000010  e6 68 f0 0d 90 83 29 3b  02 d0 5c 52 07 5a 7a 25  |.h....);..\R.Zz%|
+00000020
+$ hexdump -e '/4 "0x"' -e '/4 "%X""\n"' < SRK_1_2_3_4_fuse.bin
+0xFC76DE67
+0x38786AF5
+0x5B7BCE42
+0x5E1BAE2
+0xDF068E6
+0x3B298390
+0x525CD002
+0x257A5A07

@@ -1,0 +1,1 @@
+inherit uboot-hab-sign
