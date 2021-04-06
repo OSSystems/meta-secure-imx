@@ -1,0 +1,660 @@
+From 5976b641399db703f9533f16f0da3c6875f4346e Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Sat, 24 Nov 2018 02:28:24 +0100
+Subject: [PATCH 05/12] KEYS: add CAAM-based symmetric key subtype
+
+This new subtype uses the CAAM key blob mechanism to wrap und unwrap a
+secret (symmetric) key.
+
+A key blob is encrypted with AES-CCM and a randomly generated key which
+is part of the key blob in encrypted form. AES-CCM is an AEAD cipher
+mode, so it also produces a authentication tag (MAC) which is stored as
+part  of the key blob. Tha authentication tag is used to verify the
+integrity of the key blob on load.
+
+The blob key is encrypted using the blob key encryption key (BKEK) which
+is derived from the 256-bit one-time programmable master key (OTPMK)
+which is stored in the CAAM's secure nonvolatile storage (SVNS).
+
+Currently, this key type stores the unwrapped (plaintext) key inside the
+blob in kernel memory. Future versions will never expose the plaintext
+key to memory, but only to the CAAM engine.
+
+Signed-off-by: David Gstir <david@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ security/keys/Kconfig                       |   2 +-
+ security/keys/symmetric_keys/Kconfig        |   7 +
+ security/keys/symmetric_keys/Makefile       |   3 +
+ security/keys/symmetric_keys/caam_keyblob.c | 227 ++++++++++++++++++++++
+ security/keys/symmetric_keys/caam_keyblob.h |  44 +++++
+ security/keys/symmetric_keys/sym_caam_key.c | 291 ++++++++++++++++++++++++++++
+ 6 files changed, 573 insertions(+), 1 deletion(-)
+ create mode 100644 security/keys/symmetric_keys/caam_keyblob.c
+ create mode 100644 security/keys/symmetric_keys/caam_keyblob.h
+ create mode 100644 security/keys/symmetric_keys/sym_caam_key.c
+
+diff --git a/security/keys/Kconfig b/security/keys/Kconfig
+index 6514a0f04921..75c9dd22bcb8 100644
+--- a/security/keys/Kconfig
++++ b/security/keys/Kconfig
+@@ -121,4 +121,4 @@ config KEY_DH_OPERATIONS
+ 
+ 	 If you are unsure as to whether this is required, answer N.
+ 
+-source security/keys/symmetric_keys/Kconfig
++source "security/keys/symmetric_keys/Kconfig"
+diff --git a/security/keys/symmetric_keys/Kconfig b/security/keys/symmetric_keys/Kconfig
+index 41e3e5d654bf..946cd07a24ad 100644
+--- a/security/keys/symmetric_keys/Kconfig
++++ b/security/keys/symmetric_keys/Kconfig
+@@ -18,6 +18,13 @@ config SYMMETRIC_KEYS_MEMORY_SUBTYPE
+ 	  key type except it is usable for encrypt and decrypt operations
+ 	  through the crypto API.
+ 
++config SYMMETRIC_KEYS_CAAM_SUBTYPE
++	tristate "Symmetric CAAM-based subtype"
++	depends on CRYPTO_DEV_FSL_CAAM && CRYPTO_DEV_FSL_CAAM_JR
++	help
++	  This option provides support for symmetric key subtype which is
++	  wrapped and unwrapped using CAAM hardware support.
++
+ config SYMMETRIC_KEYS_TEST
+ 	tristate "Symmetric test module"
+ 	depends on m
+diff --git a/security/keys/symmetric_keys/Makefile b/security/keys/symmetric_keys/Makefile
+index c48c7f8cec92..ea00f1ff14d2 100644
+--- a/security/keys/symmetric_keys/Makefile
++++ b/security/keys/symmetric_keys/Makefile
+@@ -7,5 +7,8 @@ obj-$(CONFIG_SYMMETRIC_KEYS) += symmetric_type.o
+ 
+ obj-$(CONFIG_SYMMETRIC_KEYS_MEMORY_SUBTYPE) += sym_memory_key.o
+ 
++obj-$(CONFIG_SYMMETRIC_KEYS_CAAM_SUBTYPE) += sym_caam_key.o \
++	caam_keyblob.o
++
+ obj-$(CONFIG_SYMMETRIC_KEYS_TEST) += test.o
+ 
+diff --git a/security/keys/symmetric_keys/caam_keyblob.c b/security/keys/symmetric_keys/caam_keyblob.c
+new file mode 100644
+index 000000000000..1c40331fcc86
+--- /dev/null
++++ b/security/keys/symmetric_keys/caam_keyblob.c
+@@ -0,0 +1,227 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * CAAM key blob management.
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ * Based on patches by Udit Agarwal <udit.agarwal@nxp.com>
++ */
++
++#include <linux/device.h>
++#include <linux/dma-mapping.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++
++#include "caam_keyblob.h"
++#include "../../drivers/crypto/caam/desc.h"
++#include "../../drivers/crypto/caam/desc_constr.h"
++#include "../../drivers/crypto/caam/error.h"
++#include "../../drivers/crypto/caam/jr.h"
++
++/*
++ * The key modifier is used in the derivation of the BKEK. Its purpose is to
++ * differentiate between blobs and prevent arbitrary blob substition.
++ */
++// TODO let caller supply its own key modifier!
++static char key_modifier[] = "CAAM_KEYBLOB";
++static size_t key_modifier_len = sizeof(key_modifier);
++
++struct caam_blob_req {
++	struct device *jr_dev;
++
++	u8 *in_buf;
++	size_t in_len;
++	dma_addr_t in_addr;
++
++	u8 *out_buf;
++	size_t out_len;
++	dma_addr_t out_addr;
++
++	u32 hwdesc[MAX_CAAM_DESCSIZE];
++
++	struct completion done;
++	int job_ret;
++};
++
++static struct caam_blob_req *init_blob_req(struct device *dev,
++					   u8 *in_buf, size_t in_len,
++					   u8 *out_buf, size_t out_len,
++					   bool unwrap)
++{
++	struct caam_blob_req *req;
++	size_t expected_out_len;
++
++	req = kmalloc(sizeof(*req), GFP_KERNEL);
++	if (!req)
++		return ERR_PTR(-ENOMEM);
++
++	if (unwrap)
++		expected_out_len = in_len - CAAM_BLOB_OVERHEAD;
++	else
++		expected_out_len = in_len + CAAM_BLOB_OVERHEAD;
++
++	if (expected_out_len < out_len) {
++		kfree(req);
++		req = ERR_PTR(-EINVAL);
++		goto out;
++	}
++
++	req->in_buf = in_buf;
++	req->in_len = in_len;
++	req->out_buf = out_buf;
++	req->out_len = out_len;
++	req->jr_dev = dev;
++
++	init_completion(&req->done);
++
++out:
++	return req;
++}
++
++static int map_blob_req(struct caam_blob_req *req)
++{
++	int ret = -ENOMEM;
++	struct device *dev = req->jr_dev;
++
++	req->in_addr = dma_map_single(dev, req->in_buf, req->in_len,
++				      DMA_TO_DEVICE);
++	if (dma_mapping_error(dev, req->in_addr)) {
++		dev_err(dev, "Unable to map in_buf");
++		goto out;
++	}
++
++	req->out_addr = dma_map_single(dev, req->out_buf, req->out_len,
++				       DMA_FROM_DEVICE);
++	if (dma_mapping_error(dev, req->out_addr)) {
++		dma_unmap_single(dev, req->in_addr, req->in_len, DMA_TO_DEVICE);
++
++		dev_err(dev, "Unable to map out_buf");
++		goto out;
++	}
++
++	ret = 0;
++out:
++	return ret;
++}
++
++static void unmap_blob_req(struct caam_blob_req *req)
++{
++	dma_unmap_single(req->jr_dev, req->in_addr, req->in_len, DMA_TO_DEVICE);
++	dma_unmap_single(req->jr_dev, req->out_addr, req->out_len,
++			 DMA_FROM_DEVICE);
++}
++
++static void populate_hwdesc(struct caam_blob_req *req, bool unwrap)
++{
++	u32 *desc = req->hwdesc;
++
++	init_job_desc(desc, 0);
++
++	/* Load class 2 key with key modifier */
++	append_key_as_imm(desc, key_modifier, key_modifier_len,
++			  key_modifier_len, CLASS_2 | KEY_DEST_CLASS_REG);
++
++	/* SEQ IN PTR command */
++	append_seq_in_ptr(desc, req->in_addr, req->in_len, 0);
++
++        /* SEQ OUT PTR command */
++        append_seq_out_ptr(desc, req->out_addr, req->out_len, 0);
++
++        /* red blob en-/decapsulation PROTOCOL command */
++	if (unwrap)
++	        append_operation(desc, OP_TYPE_DECAP_PROTOCOL | OP_PCLID_BLOB);
++	else
++	        append_operation(desc, OP_TYPE_ENCAP_PROTOCOL | OP_PCLID_BLOB);
++}
++
++static void job_callback(struct device *dev, u32 *desc, u32 ret, void *context)
++{
++	struct caam_blob_req *req = context;
++
++	if (ret) {
++		dev_err(dev, "CAAM job error: %x\n", ret);
++		/* print error */
++		caam_jr_strstatus(dev, ret);
++	}
++	unmap_blob_req(req);
++
++	req->job_ret = ret;
++	complete(&req->done);
++}
++
++static int submit_job(struct caam_blob_req *req)
++{
++	int ret;
++
++	pr_debug("Submitting CAAM keyblob job.\n");
++	ret = caam_jr_enqueue(req->jr_dev, req->hwdesc, job_callback, req);
++	if (ret) {
++		pr_err("Failed to enqueue CAAM job!\n");
++		return ret;
++	}
++
++	wait_for_completion_interruptible(&req->done);
++
++	pr_debug("CAAM keyblob job finished with %d.\n", ret);
++	return req->job_ret;
++}
++
++int caam_blob_wrap(struct device *dev, u8 *plain, size_t plain_len, u8 *blob,
++		   size_t blob_len)
++{
++	int ret;
++	struct caam_blob_req *req;
++
++	pr_debug("Wrapping caam key blob or length %u...\n", plain_len);
++
++	req = init_blob_req(dev, plain, plain_len, blob, blob_len, false);
++	if (IS_ERR(req))
++		return PTR_ERR(req);
++
++	ret = map_blob_req(req);
++	if (ret)
++		goto out;
++
++	populate_hwdesc(req, false);
++
++	ret = submit_job(req);
++	if (ret)
++		goto out;
++
++	ret = 0;
++out:
++	kzfree(req);
++	return ret;
++}
++
++int caam_blob_unwrap(struct device *dev, u8 *blob, size_t blob_len, u8 *plain,
++		     size_t plain_len)
++{
++	int ret;
++	struct caam_blob_req *req;
++
++	pr_debug("Unwrapping caam key blob or length %u...\n", blob_len);
++
++	req = init_blob_req(dev, blob, blob_len, plain, plain_len, true);
++	if (IS_ERR(req))
++		return PTR_ERR(req);
++
++	req->in_buf = blob;
++	req->in_len = blob_len;
++	req->jr_dev = dev;
++
++	ret = map_blob_req(req);
++	if (ret)
++		goto out;
++
++	populate_hwdesc(req, true);
++
++	ret = submit_job(req);
++	if (ret)
++		goto out;
++
++	ret = 0;
++out:
++	kzfree(req);
++	return ret;
++}
+diff --git a/security/keys/symmetric_keys/caam_keyblob.h b/security/keys/symmetric_keys/caam_keyblob.h
+new file mode 100644
+index 000000000000..ec8f781cebfc
+--- /dev/null
++++ b/security/keys/symmetric_keys/caam_keyblob.h
+@@ -0,0 +1,44 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * CAAM key blob management.
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ * Based on patches by Udit Agarwal <udit.agarwal@nxp.com>
++ */
++
++/*
++ * A CAAM key blob is an encrypted and authenticated
++ * data blob. The blob format is:
++ *
++ *   +-----------------------+
++ *   |  encrypted blob key   |
++ *   +-----------------------+
++ *   |  encrypted payload    |
++ *   +-----------------------+
++ *   |  authentication tag   |
++ *   +-----------------------+
++ *
++ * The blob key is a randomly generated key by the
++ * CAAM engine which is encrypted using the blob
++ * key encryption key (BKEK). The BKEK is derived from
++ * a unique  master key stored inside the CAAM hardware.
++ * The BKEK generation can be influenced by the software
++ * throught he key modifier.
++ */
++
++#ifndef _CAAM_KEYBLOB_H
++#define _CAAM_KEYBLOB_H
++
++#include <linux/device.h>
++
++#define CAAM_BLOB_KEY_SIZE		32	/* Blob key length */
++#define CAAM_BLOB_AUTH_SIZE		16	/* Auth tag length */
++#define CAAM_BLOB_OVERHEAD		(CAAM_BLOB_KEY_SIZE + CAAM_BLOB_AUTH_SIZE)
++
++int caam_blob_wrap(struct device *dev, u8 *plain, size_t plain_len, u8 *blob,
++		   size_t blob_len);
++int caam_blob_unwrap(struct device *dev, u8 *blob, size_t blob_len, u8 *plain,
++		     size_t plain_len);
++
++#endif /* _CAAM_KEYBLOB_H */
+diff --git a/security/keys/symmetric_keys/sym_caam_key.c b/security/keys/symmetric_keys/sym_caam_key.c
+new file mode 100644
+index 000000000000..f473e68c58fb
+--- /dev/null
++++ b/security/keys/symmetric_keys/sym_caam_key.c
+@@ -0,0 +1,291 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Symmetric cryptography CAAM-based key subtype
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ */
++
++#include <keys/symmetric-subtype.h>
++#include <linux/export.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/printk.h>
++#include <linux/random.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++
++#include "caam_keyblob.h"
++#include "../../drivers/crypto/caam/jr.h"
++
++/* XXX values are abitrarily chosen */
++#define MIN_KEY_SIZE 16
++#define MAX_KEY_SIZE 128
++
++struct symmetric_key_subtype sym_caam_subtype;
++
++struct sym_caam_key_payload {
++	/* XXX rcu_head as in user_key_payload needed? */
++	unsigned int key_len;
++	char key[0];
++};
++
++static void sym_caam_destroy(void *payload_crypto)
++{
++	struct sym_caam_key_payload *payload = payload_crypto;
++
++	if (!payload)
++		return;
++	kzfree(payload);
++}
++
++static struct sym_caam_key_payload *load_key(struct device *dev, char *cmd,
++					     char *hex_payload)
++{
++	struct sym_caam_key_payload *payload = NULL;
++	u8 *data;
++	size_t key_len;
++	size_t data_len;
++	int ret;
++	bool is_blob = true;
++
++	if (strcmp(cmd, "load_plain") == 0)
++		is_blob = false;
++	else if (strcmp(cmd, "load_blob") != 0)
++		return ERR_PTR(-EINVAL);
++
++	data_len = strlen(hex_payload);
++	if (data_len % 2 != 0) {
++		pr_err("Hex key string has invalid length. Expected even number of bytes.\n");
++		return ERR_PTR(-EINVAL);
++	}
++
++	data_len /= 2;
++	data = kmalloc(data_len, GFP_KERNEL);
++	if (!data) {
++		ret = -ENOMEM;
++		goto out_err;
++	}
++
++	ret = hex2bin(data, hex_payload, data_len);
++	if (ret)
++		goto out_err;
++
++	key_len = data_len;
++	if (is_blob)
++		key_len -= CAAM_BLOB_OVERHEAD;
++
++	payload = kmalloc(sizeof(*payload) + key_len, GFP_KERNEL);
++	if (!payload) {
++		ret = -ENOMEM;
++		goto out_err;
++	}
++
++	payload->key_len = key_len;
++	if (is_blob) {
++		ret = caam_blob_unwrap(dev, data, data_len, payload->key,
++				       payload->key_len);
++		if (ret) {
++			pr_err("Unwrap of CAAM key failed\n");
++			goto out_err;
++		}
++	} else {
++		memcpy(payload->key, data, payload->key_len);
++	}
++
++	kfree(data);
++	return payload;
++
++out_err:
++	kfree(data);
++	kfree(payload);
++	return ERR_PTR(ret);
++}
++
++static struct sym_caam_key_payload *generate_key(unsigned int key_len)
++{
++	struct sym_caam_key_payload *payload;
++
++	payload = kmalloc(sizeof(*payload) + key_len, GFP_KERNEL);
++	if (!payload)
++		return ERR_PTR(-ENOMEM);
++
++	payload->key_len = key_len;
++	get_random_bytes(payload->key, payload->key_len);
++
++	return payload;
++}
++
++static int sym_caam_preparse(struct key_preparsed_payload *prep)
++{
++	int ret;
++	size_t datalen = prep->datalen;
++	char *datablob;
++	char *blob;
++	char *c;
++	struct device *dev = NULL;
++	struct sym_caam_key_payload *payload;
++	long key_len;
++
++	// TODO why magic constant 32767?
++	if (datalen <= 0 || datalen > 32767 || !prep->data)
++		return -EBADMSG;
++
++	datablob = kmalloc(datalen + 1, GFP_KERNEL);
++	if (!datablob)
++		return -ENOMEM;
++	memcpy(datablob, prep->data, datalen);
++	datablob[datalen] = '\0';
++
++	blob = datablob;
++
++	/* first argument is subkey type */
++	c = strsep(&blob, " \t");
++	if (!c || strcmp(sym_caam_subtype.name, c) != 0) {
++		ret = -EBADMSG;
++		goto out;
++	}
++
++	/* Allocate caam job ring for operation to be performed from CAAM */
++	dev = caam_jr_alloc();
++	if (!dev) {
++		pr_err("caam_jr_alloc failed\n");
++		ret = -ENODEV;
++		goto out;
++	}
++
++	/* second argument is key payload in hex or keyword 'new' */
++	c = strsep(&blob, " \t");
++	if (!c) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if (strcmp(c, "new") == 0) {
++		/* third argument is key length */
++		c = strsep(&blob, " \t");
++		if (!c) {
++			ret = -EINVAL;
++			goto out;
++		}
++
++		ret = kstrtoul(c, 10, &key_len);
++		if (ret < 0 || key_len < MIN_KEY_SIZE || key_len > MAX_KEY_SIZE) {
++			ret = -EINVAL;
++			goto out;
++		}
++
++		payload = generate_key(key_len);
++	} else {
++		payload = load_key(dev, c, blob);
++	}
++	if (IS_ERR(payload)) {
++		ret = PTR_ERR(payload);
++		goto out;
++	}
++
++	// XXX do we really need that? is datalen the correct value?
++	prep->quotalen = datalen;
++	prep->payload.data[sym_crypto] = payload;
++	prep->payload.data[sym_subtype] = &sym_caam_subtype;
++	ret = 0;
++out:
++	if (dev)
++		caam_jr_free(dev);
++	kzfree(datablob);
++	return ret;
++}
++
++static long sym_caam_read(void *payload_crypto, char __user *buffer,
++			    size_t buflen)
++{
++	struct sym_caam_key_payload *p = payload_crypto;
++	u8 *blob;
++	size_t blob_len;
++	char *hex_buf;
++	size_t hex_len;
++	long ret;
++	struct device *dev = NULL;
++
++	blob_len = p->key_len + CAAM_BLOB_OVERHEAD;
++	hex_len = (2 * blob_len) + 1;
++	if (!buffer || buflen < hex_len)
++		return hex_len;
++
++	blob = kmalloc(blob_len, GFP_KERNEL);
++	if (!blob)
++		return -ENOMEM;
++
++	hex_buf = kmalloc(hex_len, GFP_KERNEL);
++	if (!hex_buf) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	/* Allocate caam job ring for operation to be performed from CAAM */
++	dev = caam_jr_alloc();
++	if (!dev) {
++		pr_err("caam_jr_alloc failed\n");
++		ret = -ENODEV;
++		goto out;
++	}
++
++	ret = caam_blob_wrap(dev, p->key, p->key_len, blob, blob_len);
++	if (ret) {
++		pr_err("Failed to wrap key blob: %ld\n", ret);
++		goto out;
++	}
++
++	hex_buf[hex_len - 1] = '\0';
++	bin2hex(hex_buf, blob, blob_len);
++
++	if (copy_to_user(buffer, hex_buf, hex_len) != 0) {
++		ret = -EFAULT;
++		goto out;
++	}
++
++	ret = hex_len;
++out:
++	if (dev)
++		caam_jr_free(dev);
++	kfree(blob);
++	kfree(hex_buf);
++	return ret;
++}
++
++static void sym_caam_get_keyref(void *payload_crypto, const u8 **keyref_out,
++				 unsigned int *keyref_len)
++{
++	struct sym_caam_key_payload *p = payload_crypto;
++
++	*keyref_out = p->key;
++	*keyref_len = p->key_len;
++}
++
++struct symmetric_key_subtype sym_caam_subtype = {
++	.owner		= THIS_MODULE,
++	.name		= "caam",
++	.destroy	= sym_caam_destroy,
++	.preparse	= sym_caam_preparse,
++	.read		= sym_caam_read,
++	.get_keyref	= sym_caam_get_keyref
++};
++EXPORT_SYMBOL_GPL(sym_caam_subtype);
++
++static int __init sym_caam_subtype_init(void)
++{
++	return register_symmetric_key_subtype(&sym_caam_subtype);
++}
++
++static void __exit sym_caam_subtype_exit(void)
++{
++	unregister_symmetric_key_subtype(&sym_caam_subtype);
++}
++
++module_init(sym_caam_subtype_init);
++module_exit(sym_caam_subtype_exit);
++
++MODULE_DESCRIPTION("CAAM-based symmetric key type");
++MODULE_AUTHOR("sigma star gmbh");
++MODULE_LICENSE("GPL v2");
+-- 
+2.13.6
+

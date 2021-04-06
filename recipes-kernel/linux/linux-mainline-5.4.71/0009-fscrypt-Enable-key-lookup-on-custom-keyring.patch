@@ -1,0 +1,102 @@
+From 654a22f7cac84cc0bab9afbd224cc353e0d14f07 Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Thu, 14 Mar 2019 00:45:02 +0100
+Subject: [PATCH 09/12] fscrypt: Enable key lookup on custom keyring
+
+fscrypt loads the master key from the currently available keyrings. These are the
+user's session and default keyrings as well as any process specific keyrings of the
+initiating process. Consequently, in case multiple users share a fscrypt-enabled
+mountpoint, each user has to have the corresponding key in any of these keyrings.
+
+To support use-cases where not every user is required to know the actual fscrypt
+key and have it in one of his keyrings, we allow each FS to supply custom
+credentials which will be used to override the current credentials before key
+lookup.
+
+This enables each FS to configure a custom keyring where a privileged user
+(e.g. root) can store the encryption key. A dedicated mount flag can be used to
+enable this "global" keyring on a per-mountpoint base. Whenever a non-privileged
+user accesses any file of an fscrypt-enabled mountpoint, the fscrpyt master key
+is loaded from this global keyring.
+
+Signed-off-by: David Gstir <david@sigma-star.at>
+Signed-off-by: David Oberhollenzer <david.oberhollenzer@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ fs/crypto/keysetup_v1.c | 17 ++++++++++++++++-
+ include/linux/fscrypt.h |  1 +
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/fs/crypto/keysetup_v1.c b/fs/crypto/keysetup_v1.c
+index edcafc06e8ec..ef29d2e6e427 100644
+--- a/fs/crypto/keysetup_v1.c
++++ b/fs/crypto/keysetup_v1.c
+@@ -25,6 +25,7 @@
+ #include <keys/user-type.h>
+ #include <linux/hashtable.h>
+ #include <linux/scatterlist.h>
++#include <linux/cred.h>
+ 
+ #include "fscrypt_private.h"
+ 
+@@ -100,6 +101,8 @@ find_and_lock_process_key(const char *prefix,
+ 	const struct user_key_payload *ukp;
+ 	const struct fscrypt_key *payload;
+ 	struct key_type *key_type = &key_type_logon;
++	const struct cred *saved_cred = NULL;
++	struct cred *override_cred = cop->key_cred;
+ 
+ 	if (cop->key_type) {
+ 		BUG_ON(cop->get_key_payload == NULL);
+@@ -111,10 +114,17 @@ find_and_lock_process_key(const char *prefix,
+ 	if (!description)
+ 		return ERR_PTR(-ENOMEM);
+ 
++	if (override_cred)
++		saved_cred = override_creds(override_cred);
++
+ 	key = request_key(key_type, description, NULL);
+ 	kfree(description);
+-	if (IS_ERR(key))
++	if (IS_ERR(key)) {
++		if (saved_cred)
++			revert_creds(saved_cred);
++
+ 		return key;
++	}
+ 
+ 	down_read(&key->sem);
+ 
+@@ -146,12 +156,17 @@ find_and_lock_process_key(const char *prefix,
+ 		}
+ 	}
+ 
++	if (saved_cred)
++		revert_creds(saved_cred);
++
+ 	*payload_ret = payload;
+ 	return key;
+ 
+ invalid:
+ 	up_read(&key->sem);
+ 	key_put(key);
++	if (saved_cred)
++		revert_creds(saved_cred);
+ 	return ERR_PTR(-ENOKEY);
+ }
+ 
+diff --git a/include/linux/fscrypt.h b/include/linux/fscrypt.h
+index 162ba1791556..c1d1191a43b4 100644
+--- a/include/linux/fscrypt.h
++++ b/include/linux/fscrypt.h
+@@ -58,6 +58,7 @@ struct fscrypt_operations {
+ 	unsigned int flags;
+ 	const char *key_prefix;
+ 	struct key_type *key_type;
++	struct cred *key_cred;
+ 	int (*get_context)(struct inode *, void *, size_t);
+ 	int (*set_context)(struct inode *, const void *, size_t, void *);
+ 	bool (*dummy_context)(struct inode *);
+-- 
+2.13.6
+

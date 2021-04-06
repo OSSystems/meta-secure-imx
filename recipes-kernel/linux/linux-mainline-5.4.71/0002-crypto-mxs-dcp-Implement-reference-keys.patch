@@ -1,0 +1,203 @@
+From 7337f3b905eedf38c4f1a21aa68f20dea1112dde Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Wed, 3 Apr 2019 22:26:23 +0200
+Subject: [PATCH 02/12] crypto: mxs-dcp: Implement reference keys
+
+That way we can encrypt data based on hardware keys
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ drivers/crypto/mxs-dcp.c | 104 ++++++++++++++++++++++++++++++++++++++++-------
+ include/linux/crypto.h   |   1 +
+ 2 files changed, 91 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/crypto/mxs-dcp.c b/drivers/crypto/mxs-dcp.c
+index f8a48a84df2a..ca51f3e1f6c8 100644
+--- a/drivers/crypto/mxs-dcp.c
++++ b/drivers/crypto/mxs-dcp.c
+@@ -142,6 +142,10 @@ static struct dcp *global_sdcp;
+ 
+ #define MXS_DCP_CONTEXT				0x50
+ 
++#define MXS_DCP_KEY				0x60
++#define MXS_DCP_KEY_IDX(id, word)		(((id) << 4) | (word))
++#define MXS_DCP_KEYDATA				0x70
++
+ #define MXS_DCP_CH_N_CMDPTR(n)			(0x100 + ((n) * 0x40))
+ 
+ #define MXS_DCP_CH_N_SEMA(n)			(0x110 + ((n) * 0x40))
+@@ -153,6 +157,7 @@ static struct dcp *global_sdcp;
+ #define MXS_DCP_CONTROL0_HASH_TERM		(1 << 13)
+ #define MXS_DCP_CONTROL0_HASH_INIT		(1 << 12)
+ #define MXS_DCP_CONTROL0_PAYLOAD_KEY		(1 << 11)
++#define MXS_DCP_CONTROL0_OTP_KEY		(1 << 10)
+ #define MXS_DCP_CONTROL0_CIPHER_ENCRYPT		(1 << 8)
+ #define MXS_DCP_CONTROL0_CIPHER_INIT		(1 << 9)
+ #define MXS_DCP_CONTROL0_ENABLE_HASH		(1 << 6)
+@@ -166,6 +171,33 @@ static struct dcp *global_sdcp;
+ #define MXS_DCP_CONTROL1_CIPHER_MODE_ECB	(0 << 4)
+ #define MXS_DCP_CONTROL1_CIPHER_SELECT_AES128	(0 << 0)
+ 
++#if 0
++static int mxs_dcp_fill_keyslot(int slot, const u8 *key)
++{
++	struct dcp *sdcp = global_sdcp;
++	uint32_t subword;
++
++	if (slot < 0 || slot > 3)
++		return -EINVAL;
++
++	writel(MXS_DCP_KEY_IDX(slot, 0), sdcp->base + MXS_DCP_KEY);
++
++	subword = (key[3] << 24) | (key[2] << 16) | (key[1] << 8) | key[0];
++	writel(subword, sdcp->base + MXS_DCP_KEYDATA);
++
++	subword = (key[7] << 24) | (key[6] << 16) | (key[5] << 8) | key[4];
++	writel(subword, sdcp->base + MXS_DCP_KEYDATA);
++
++	subword = (key[11] << 24) | (key[10] << 16) | (key[9] << 8) | key[8];
++	writel(subword, sdcp->base + MXS_DCP_KEYDATA);
++
++	subword = (key[15] << 24) | (key[14] << 16) | (key[13] << 8) | key[12];
++	writel(subword, sdcp->base + MXS_DCP_KEYDATA);
++
++	return 0;
++}
++#endif
++
+ static int mxs_dcp_start_dma(struct dcp_async_ctx *actx)
+ {
+ 	struct dcp *sdcp = global_sdcp;
+@@ -217,15 +249,22 @@ static int mxs_dcp_run_aes(struct dcp_async_ctx *actx,
+ 	struct dcp *sdcp = global_sdcp;
+ 	struct dcp_dma_desc *desc = &sdcp->coh->desc[actx->chan];
+ 	struct dcp_aes_req_ctx *rctx = ablkcipher_request_ctx(req);
++	struct crypto_async_request *arq = &req->base;
++	bool key_referenced = !!(crypto_tfm_get_flags(arq->tfm) &
++				 CRYPTO_TFM_REQ_REF_KEY);
++	dma_addr_t src_phys, dst_phys, key_phys = {0};
+ 	int ret;
+ 
+-	dma_addr_t key_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
+-					     2 * AES_KEYSIZE_128,
+-					     DMA_TO_DEVICE);
+-	dma_addr_t src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
+-					     DCP_BUF_SZ, DMA_TO_DEVICE);
+-	dma_addr_t dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
+-					     DCP_BUF_SZ, DMA_FROM_DEVICE);
++	if (!key_referenced) {
++		key_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_key,
++						     2 * AES_KEYSIZE_128,
++						     DMA_TO_DEVICE);
++	}
++
++	src_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_in_buf,
++				  DCP_BUF_SZ, DMA_TO_DEVICE);
++	dst_phys = dma_map_single(sdcp->dev, sdcp->coh->aes_out_buf,
++				  DCP_BUF_SZ, DMA_FROM_DEVICE);
+ 
+ 	if (actx->fill % AES_BLOCK_SIZE) {
+ 		dev_err(sdcp->dev, "Invalid block size!\n");
+@@ -238,8 +277,12 @@ static int mxs_dcp_run_aes(struct dcp_async_ctx *actx,
+ 		    MXS_DCP_CONTROL0_INTERRUPT |
+ 		    MXS_DCP_CONTROL0_ENABLE_CIPHER;
+ 
+-	/* Payload contains the key. */
+-	desc->control0 |= MXS_DCP_CONTROL0_PAYLOAD_KEY;
++	if (key_referenced) {
++		desc->control0 |= MXS_DCP_CONTROL0_OTP_KEY;
++	} else {
++		/* Payload contains the key. */
++		desc->control0 |= MXS_DCP_CONTROL0_PAYLOAD_KEY;
++	}
+ 
+ 	if (rctx->enc)
+ 		desc->control0 |= MXS_DCP_CONTROL0_CIPHER_ENCRYPT;
+@@ -253,18 +296,26 @@ static int mxs_dcp_run_aes(struct dcp_async_ctx *actx,
+ 	else
+ 		desc->control1 |= MXS_DCP_CONTROL1_CIPHER_MODE_CBC;
+ 
++	if (key_referenced)
++		desc->control1 |= sdcp->coh->aes_key[0] << 8;
++
+ 	desc->next_cmd_addr = 0;
+ 	desc->source = src_phys;
+ 	desc->destination = dst_phys;
+ 	desc->size = actx->fill;
+-	desc->payload = key_phys;
++	if (key_referenced)
++		desc->payload = 0;
++	else
++		desc->payload = key_phys;
+ 	desc->status = 0;
+ 
+ 	ret = mxs_dcp_start_dma(actx);
+ 
+ aes_done_run:
+-	dma_unmap_single(sdcp->dev, key_phys, 2 * AES_KEYSIZE_128,
+-			 DMA_TO_DEVICE);
++	if (!key_referenced) {
++		dma_unmap_single(sdcp->dev, key_phys, 2 * AES_KEYSIZE_128,
++				 DMA_TO_DEVICE);
++	}
+ 	dma_unmap_single(sdcp->dev, src_phys, DCP_BUF_SZ, DMA_TO_DEVICE);
+ 	dma_unmap_single(sdcp->dev, dst_phys, DCP_BUF_SZ, DMA_FROM_DEVICE);
+ 
+@@ -493,15 +544,40 @@ static int mxs_dcp_aes_setkey(struct crypto_ablkcipher *tfm, const u8 *key,
+ 			      unsigned int len)
+ {
+ 	struct dcp_async_ctx *actx = crypto_ablkcipher_ctx(tfm);
++	bool key_referenced = !!(crypto_ablkcipher_get_flags(tfm) &
++				 CRYPTO_TFM_REQ_REF_KEY);
+ 	unsigned int ret;
+ 
+ 	/*
+-	 * AES 128 is supposed by the hardware, store key into temporary
++	 * AES 128 is supported by the hardware, store key into temporary
+ 	 * buffer and exit. We must use the temporary buffer here, since
+ 	 * there can still be an operation in progress.
+ 	 */
+ 	actx->key_len = len;
+-	if (len == AES_KEYSIZE_128) {
++
++	if (key_referenced) {
++		/*
++		 * If a hardware key is used, no software fallback is possible.
++		 */
++		if (len != AES_KEYSIZE_128)
++			return -EINVAL;
++
++		/*
++		 * DCP supports the following key slots.
++		 */
++		switch (key[0]) {
++		case 0x00:
++		case 0x01:
++		case 0x02:
++		case 0x03:
++		case 0xfe:
++		case 0xff:
++			memcpy(actx->key, key, len);
++			return 0;
++		default:
++			return -EINVAL;
++		}
++	} else if (len == AES_KEYSIZE_128) {
+ 		memcpy(actx->key, key, len);
+ 		return 0;
+ 	}
+diff --git a/include/linux/crypto.h b/include/linux/crypto.h
+index 19ea3a371d7b..064476b0beb5 100644
+--- a/include/linux/crypto.h
++++ b/include/linux/crypto.h
+@@ -115,6 +115,7 @@
+ #define CRYPTO_TFM_REQ_FORBID_WEAK_KEYS	0x00000100
+ #define CRYPTO_TFM_REQ_MAY_SLEEP	0x00000200
+ #define CRYPTO_TFM_REQ_MAY_BACKLOG	0x00000400
++#define CRYPTO_TFM_REQ_REF_KEY		0x00000800
+ #define CRYPTO_TFM_RES_WEAK_KEY		0x00100000
+ #define CRYPTO_TFM_RES_BAD_KEY_LEN   	0x00200000
+ #define CRYPTO_TFM_RES_BAD_KEY_SCHED 	0x00400000
+-- 
+2.13.6
+

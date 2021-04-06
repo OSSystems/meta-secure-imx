@@ -1,0 +1,26 @@
+From 50db36b8b7c32836a693afb4d5a3ca9fe6c362dd Mon Sep 17 00:00:00 2001
+From: Heiko Schocher <hs@denx.de>
+Date: Wed, 10 Mar 2021 06:59:30 +0100
+Subject: [PATCH 13/13] caam_keyblob.c: fix from Richard
+
+Signed-off-by: Heiko Schocher <hs@denx.de>
+---
+ security/keys/symmetric_keys/caam_keyblob.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/keys/symmetric_keys/caam_keyblob.c b/security/keys/symmetric_keys/caam_keyblob.c
+index 0fa7459a6d61..38b0fe21ddfc 100644
+--- a/security/keys/symmetric_keys/caam_keyblob.c
++++ b/security/keys/symmetric_keys/caam_keyblob.c
+@@ -155,7 +155,7 @@ static int submit_job(struct caam_blob_req *req)
+ 
+ 	pr_debug("Submitting CAAM keyblob job.\n");
+ 	ret = caam_jr_enqueue(req->jr_dev, req->hwdesc, job_callback, req);
+-	if (ret) {
++	if (ret && ret != -EINPROGRESS) {
+ 		pr_err("Failed to enqueue CAAM job!\n");
+ 		return ret;
+ 	}
+-- 
+2.20.1
+

@@ -1,0 +1,76 @@
+From 14a33a309a14e1226b9c3a619b98dece00c28762 Mon Sep 17 00:00:00 2001
+From: Heiko Schocher <hs@denx.de>
+Date: Thu, 16 Jul 2020 12:56:38 +0200
+Subject: [PATCH] symmetric_keys: Fix key buffer usage
+
+sym_dcp_read() calls directly copy_to_user()
+but keyctl_read_key which calls sym_dcp_read()
+kvmalloc a buffer and passes this buffer to
+sym_dcp_read() instead, and handles calling copy_to_user
+on his own.
+
+This is just a hack to get "keyctl pipe" working
+again.
+
+It seems to me, that this part in security/keys/keyctl.c
+needs rework or at least struct symmetric_key_subtype
+the read function definition must be fixed.
+
+[rw: Fix CAAM too]
+Signed-off-by: Heiko Schocher <hs@denx.de>
+
+---
+ security/keys/symmetric_keys/sym_caam_key.c | 8 ++++++++
+ security/keys/symmetric_keys/sym_dcp_key.c  | 8 ++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/security/keys/symmetric_keys/sym_caam_key.c b/security/keys/symmetric_keys/sym_caam_key.c
+index 5121adfdbd85..e9b0622c4f28 100644
+--- a/security/keys/symmetric_keys/sym_caam_key.c
++++ b/security/keys/symmetric_keys/sym_caam_key.c
+@@ -238,12 +238,20 @@ static long sym_caam_read(void *payload_crypto, char __user *buffer,
+ 	}
+ 
+ 	hex_buf[hex_len] = '\0';
++#if 0
+ 	bin2hex(hex_buf, blob, blob_len);
+ 
+ 	if (copy_to_user(buffer, hex_buf, hex_len) != 0) {
+ 		ret = -EFAULT;
+ 		goto out;
+ 	}
++#else
++	/*
++	 * copy directly into buffer, as it is no __user
++	 * buffer, instead it get kvmalloced in  keyctl_read_key()
++	 */
++	bin2hex(buffer, blob, blob_len);
++#endif
+ 
+ 	ret = hex_len;
+ out:
+diff --git a/security/keys/symmetric_keys/sym_dcp_key.c b/security/keys/symmetric_keys/sym_dcp_key.c
+index dcc5130c3e08..6b5f85516f65 100644
+--- a/security/keys/symmetric_keys/sym_dcp_key.c
++++ b/security/keys/symmetric_keys/sym_dcp_key.c
+@@ -411,12 +411,20 @@ static long sym_dcp_read(void *payload_crypto, char __user *buffer,
+ 	}
+ 
+ 	hex_buf[hex_len] = '\0';
++#if 0
+ 	bin2hex(hex_buf, dcp_blob, dcp_blob_len);
+ 
+ 	if (copy_to_user(buffer, hex_buf, hex_len) != 0) {
+ 		ret = -EFAULT;
+ 		goto out;
+ 	}
++#else
++	/*
++	 * copy directly into buffer, as it is no __user
++	 * buffer, instead it get kvmalloced in  keyctl_read_key()
++	 */
++	bin2hex(buffer, dcp_blob, dcp_blob_len);
++#endif
+ 
+ 	ret = hex_len;
+ out:

@@ -1,0 +1,107 @@
+From fbef1784b9a7f34a8a1df9ebd450e650894ee274 Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Thu, 24 Jan 2019 22:21:43 +0100
+Subject: [PATCH 07/13] dm-crypt: Add support for symmetric keys
+
+This allows us to use a key provided by CAAM.
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+
+---
+ drivers/md/Kconfig    |  1 +
+ drivers/md/dm-crypt.c | 49 ++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/md/Kconfig b/drivers/md/Kconfig
+index 2cefb075b2b8..9ea9e20b6f88 100644
+--- a/drivers/md/Kconfig
++++ b/drivers/md/Kconfig
+@@ -270,6 +270,7 @@ config DM_CRYPT
+ 	tristate "Crypt target support"
+ 	depends on BLK_DEV_DM
+ 	depends on (ENCRYPTED_KEYS || ENCRYPTED_KEYS=n)
++	depends on m
+ 	select CRYPTO
+ 	select CRYPTO_CBC
+ 	select CRYPTO_ESSIV
+diff --git a/drivers/md/dm-crypt.c b/drivers/md/dm-crypt.c
+index 70ae6f3aede9..e7fd93f96e9a 100644
+--- a/drivers/md/dm-crypt.c
++++ b/drivers/md/dm-crypt.c
+@@ -37,6 +37,10 @@
+ #include <linux/key-type.h>
+ #include <keys/user-type.h>
+ #include <keys/encrypted-type.h>
++#include <keys/symmetric-type.h>
++#include <keys/symmetric-subtype.h>
++#include <linux/key-type.h>
++#include <linux/keyctl.h>
+ 
+ #include <linux/device-mapper.h>
+ 
+@@ -2461,6 +2465,7 @@ static int crypt_set_keyring_key(struct crypt_config *cc, const char *key_string
+ 	struct key_type *type;
+ 	struct key *key;
+ 	int (*set_key)(struct crypt_config *cc, struct key *key);
++	bool global_symmetric_key = false;
+ 
+ 	/*
+ 	 * Reject key_string with whitespace. dm core currently lacks code for
+@@ -2497,18 +2502,46 @@ static int crypt_set_keyring_key(struct crypt_config *cc, const char *key_string
+ 
+ 	key = request_key(type, key_desc + 1, NULL);
+ 	if (IS_ERR(key)) {
+-		kfree_sensitive(new_key_string);
+-		return PTR_ERR(key);
++		key = request_key(&key_type_symmetric, key_desc + 1, NULL);
++		if (IS_ERR(key)) {
++			kfree_sensitive(new_key_string);
++			return PTR_ERR(key);
++		}
++		global_symmetric_key = true;
+ 	}
+ 
+ 	down_read(&key->sem);
+ 
+-	ret = set_key(cc, key);
+-	if (ret < 0) {
+-		up_read(&key->sem);
+-		key_put(key);
+-		kfree_sensitive(new_key_string);
+-		return ret;
++	if (!global_symmetric_key) {
++		ret = set_key(cc, key);
++		if (ret < 0) {
++			up_read(&key->sem);
++			key_put(key);
++			kfree_sensitive(new_key_string);
++			return ret;
++		}
++	} else {
++		const u8 *payload;
++		unsigned int payload_len;
++
++		ret = symmetric_key_keyref(key, &payload, &payload_len);
++		if (ret) {
++			DMERR("Failed to symmetric_key_keyref: %i", ret);
++			up_read(&key->sem);
++			key_put(key);
++			kfree_sensitive(new_key_string);
++			return -EINVAL;
++		}
++
++		if (cc->key_size != payload_len) {
++			DMERR("Symmetric key payload len mismatch: %i vs %i", cc->key_size, payload_len);
++			up_read(&key->sem);
++			key_put(key);
++			kfree_sensitive(new_key_string);
++			return -EINVAL;
++		}
++
++		memcpy(cc->key, payload, payload_len);
+ 	}
+ 
+ 	up_read(&key->sem);
+-- 
+2.20.1
+
