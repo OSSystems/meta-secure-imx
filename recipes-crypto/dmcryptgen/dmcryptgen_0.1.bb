@@ -6,14 +6,14 @@ SRC_URI = "file://dmcrypt_gen.c"
 
 S = "${WORKDIR}"
 
-DEPENDS = "openssl pkgconfig-native"
+DEPENDS = "openssl pkgconfig"
 BBCLASSEXTEND += "native"
-INSANE_SKIP_${PN} += "ldflags"
+
+inherit pkgconfig
 
 do_compile() {
-	SSLFLAGS="`pkg-config --cflags openssl`"
-	LDFLAGS="`pkg-config --libs openssl`"
-	${CC} dmcrypt_gen.c ${SSLFLAGS} -o dmcrypt_gen ${LDFLAGS?}
+	SSLFLAGS="`pkg-config --cflags --libs openssl`"
+	${CC} dmcrypt_gen.c ${SSLFLAGS} ${LDFLAGS} -o dmcrypt_gen
 }
 
 do_install() {
