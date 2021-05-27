@@ -14,6 +14,10 @@ crypt_file() {
 	export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CP}
 	input=$1
 	key=${ENC_KEY_RAW}
+	if [ -z "${key}" ];then
+		bbfatal "ENC_KEY_RAW must be set to encrypt the filesystem"
+	fi
+	bbnote "KEY ${key}"
 	dmcrypt_gen ${input} ${key}
 }
 
