@@ -219,8 +219,6 @@ On boot the initramfs is performing the reverse process to verify the digital si
         # +------------+
 
 
-The implementation is done in *verifyfs.inc*
-
 ### encrypted rootfs (read only squashfs)
 
 As rootfs we use a read-only squashfs (ramdisk). The rootfs is crypted
