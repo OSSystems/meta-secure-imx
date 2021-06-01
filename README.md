@@ -172,7 +172,7 @@ in Initramfs before mounting it:
 
 1) The rootfs image size is aligned to MB blocks
 
-2) Magic Header "SSI_SCXX" is appended to those blocks
+2) Magic Header is appended to those blocks
 
 3) The sum is then hashed signed and signature is the appended
 
@@ -229,8 +229,31 @@ performs the needed steps to crypt the FS image.
 
 As it is not a good idea to store the key in plain, we use the
 DCP or CAAM for crypting the raw key and get a key blob we can store
-in the SPI NOR. We store this key in the MTD Partition "key"
-@ offset 0x0
+in the SPI NOR.
+
+The blob is stored on a project specific device. The user of the layer
+should provide a /etc/default/initramfs file, that loads the blob
+and copies it into /tmp/key.blob. This is used by the ramdisk to setup
+the encryptded rootfs.
+
+To create and store the blob:
+
+	keyctl add symmetric "rootfskey" "<engine> load_plain <key hex text>" @s
+
+For example:
+
+	keyctl add symmetric "rootfskey" "caam load_plain 0102030405060708AABBCCDDEEFF12AA" @s
+	keyctl show -x
+
+You get an id for the key.
+
+Then export the blob:
+
+	keyctl pipe <key id> > /tmp/blob
+
+And copy the resulting blob on a persistent device. The real key is never exposed and it is
+decrypted with the unique key of the device, so this procedure must be done for each produced
+device in the factory.
 
 ### DCP usage
 
@@ -246,23 +269,11 @@ See the initrd script: *recipes-core/initrdscripts/files/initramfs-init.sh*
 
 ### raw key definitions
 
-!!!
-
-we generate with meta-scx-core a sd card image, which contains the
-raw key for the crypted rootfs image (we need to create the key blob).
-Do not deliver this image
-
-!!!
-
-define for example in auto.conf your raw key for the rootfs image:
+define for example in your raw key for the rootfs image:
 
 ENC_KEY_RAW ?= "fdf6842566d47e47d6874da561fec433"
 
 It is used in script set_keyblob.sh
-
-
-CRYPT_KEY gets replaced with real value recipes-support/initfunctions/initfunctions_1.0.bb
-
 
 to setup the key blob for rootfs encryption.
 
