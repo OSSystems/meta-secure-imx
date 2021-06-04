@@ -114,16 +114,20 @@ csf_assemble() {
 kernel_do_deploy_append() {
 
 	cd ${B}/arch/${ARCH}/boot
-
-	if [ -n "${INITRAMFS_IMAGE}" ] && [ -f "fitImage-${INITRAMFS_IMAGE}" ]; then
-		attach_ivt fitImage-${INITRAMFS_IMAGE}
-		csf_assemble command_sequence_fitImage-${INITRAMFS_IMAGE}-ivt.csf fitImage-${INITRAMFS_IMAGE}-ivt
-		cst --o fitImage-${INITRAMFS_IMAGE}-ivt.csf --i command_sequence_fitImage-${INITRAMFS_IMAGE}-ivt.csf
-		cat fitImage-${INITRAMFS_IMAGE}-ivt fitImage-${INITRAMFS_IMAGE}-ivt.csf > fitImage-${INITRAMFS_IMAGE}-ivt.tmp
-		cp fitImage-${INITRAMFS_IMAGE}-ivt.tmp fitImage-${INITRAMFS_IMAGE}-ivt.${KERNEL_SIGN_SUFFIX}
-		rm -f fitImage-${INITRAMFS_IMAGE}-ivt.tmp fitImage-${INITRAMFS_IMAGE}-ivt.csf fitImage-${INITRAMFS_IMAGE}-ivt
-		install fitImage-${INITRAMFS_IMAGE}-ivt.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX}
-	else
-		bbwarn "${B}/arch/${ARCH}/boot/fitImage-${INITRAMFS_IMAGE} not found!"	
+	if [ -n ${HAB_ENABLE} ];then
+		if [ -n "${INITRAMFS_IMAGE}" ] && [ -f "fitImage-${INITRAMFS_IMAGE}" ]; then
+			FITIMAGE="fitImage-${INITRAMFS_IMAGE}"
+			FITLOADADDR=`mkimage -l ${FITIMAGE} | awk 'NR<14 {print $0}' | grep "Load Address:" | cut -d':' -f 2`
+			attach_ivt ${FITIMAGE}
+			csf_assemble command_sequence_${FITIMAGE}-ivt.csf ${FITIMAGE}-ivt
+			echo "cst --o ${FITIMAGE}-ivt.csf --i command_sequence_${FITIMAGE}-ivt.csf"
+			cst --o ${FITIMAGE}-ivt.csf --i command_sequence_${FITIMAGE}-ivt.csf
+			cat ${FITIMAGE}-ivt ${FITIMAGE}-ivt.csf > ${FITIMAGE}-ivt.tmp
+			cp ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX}
+			rm -f ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.csf ${FITIMAGE}-ivt
+			install ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX}
+		else
+			bbwarn "${B}/arch/${ARCH}/boot/fitImage-${INITRAMFS_IMAGE} not found!"	
+		fi
 	fi
 }
