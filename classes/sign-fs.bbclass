@@ -56,7 +56,6 @@ MB="$(expr 1024 \* 1024)"
 # Magic marker such that the initramfs is able to find the signature
 MAGIC="SSI_SCXX"
 MAGIC_SIZE="4096"
-
 align_data_size() {
     FILE_SZ="$(stat -Lc%s "${1}")"
     FILE_MB_SZ="$(expr $FILE_SZ \/ ${MB})"
@@ -98,6 +97,7 @@ CONVERSION_CMD_signed() {
 }
 
 do_sign_fs () {
+	SIGN_FS_IMAGE_NAME=${IMAGE_NAME}${IMAGE_NAME_SUFFIX}
 	echo "======= do_sign_fs setup ========="
 	echo "SIGN_FS_IMAGE_NAME " ${SIGN_FS_IMAGE_NAME}
 	echo "DEPLOY_DIR         " ${DEPLOY_DIR}
@@ -121,4 +121,4 @@ do_sign_fs () {
 	mv ${work}.signed ${output}
 	rm -f ${work}*
 }
-addtask do_sign_fs after do_image_complete before do_populate_lic_deploy
+#addtask do_sign_fs after do_image_complete before do_populate_lic_deploy
