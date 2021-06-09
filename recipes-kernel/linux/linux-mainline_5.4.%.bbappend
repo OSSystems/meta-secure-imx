@@ -1,4 +1,4 @@
-FILESEXTRAPATHS_append := "${THISDIR}/${PN}-${PV}:"
+FILESEXTRAPATHS_append := "${THISDIR}/linux-5.4:"
 
 SRC_URI_append = " \
   file://0001-arm-dts-Enable-mxs-dcp-by-default.patch \
