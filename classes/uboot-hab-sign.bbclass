@@ -54,13 +54,11 @@ EOF
 # $2 ... binary to sign
 # 
 csf_assemble() {
-
 	blocks="$(sed -n 's/HAB Blocks:[\t ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)/\1 \2 \3/p' ${2}.log)"
 	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}"
 }
 
 do_sign_uboot() {
-
 	for config in ${UBOOT_MACHINE}; do
 		cd ${B}/${config}
 		if [ -n "${SPL_BINARY}" ]; then
@@ -93,4 +91,4 @@ do_deploy_append() {
         unset  i
 }
 
-addtask sign_uboot before do_install do_deploy after do_compile
+addtask sign_uboot before do_install after do_compile
