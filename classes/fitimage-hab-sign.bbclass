@@ -129,5 +129,7 @@ kernel_do_deploy_append() {
 		else
 			bbwarn "${B}/arch/${ARCH}/boot/fitImage-${INITRAMFS_IMAGE} not found!"	
 		fi
+	else
+		bbwarn "HAB_ENABLE not set!"
 	fi
 }
