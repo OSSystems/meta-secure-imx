@@ -13,6 +13,7 @@ python __anonymous () {
 # $4 ... Image Key File
 # $5 ... Blocks Parameter
 # $6 ... Image File
+# $7 ... CAAM / DCP
 csf_emit_file() {
 	cat << EOF > ${1}
 [Header]
@@ -21,7 +22,7 @@ Hash Algorithm = sha256
 Engine Configuration = 0
 Certificate Format = X509
 Signature Format = CMS
-Engine = CAAM
+Engine = ${7}
 
 [Install SRK]
 File = "${2}"
@@ -42,7 +43,7 @@ Verification index = 2
 Blocks = ${5} "${6}"
 
 [Unlock]
-Engine = CAAM
+Engine = ${7}
 Features = RNG
 EOF
 }
@@ -55,7 +56,7 @@ EOF
 # 
 csf_assemble() {
 	blocks="$(sed -n 's/HAB Blocks:[\t ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)/\1 \2 \3/p' ${2}.log)"
-	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}"
+	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" CAAM
 }
 
 do_sign_uboot() {
