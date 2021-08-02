@@ -41,6 +41,10 @@ then authenticates the software by performing the following steps:
 CST Tool can be downloaded from NXP Website at :
 https://www.nxp.com/webapp/sps/download/license.jsp?colCode=IMX_CST_TOOL
 
+For imx8mp
+https://www.nxp.com/webapp/Download?colCode=IMX_CST_TOOL_NEW
+
+which was ```cst-3.3.1.tgz``` when writting this document.
 
 * Certificates/keys generation:
 
@@ -74,6 +78,8 @@ generate the fuse table and binary hash:
         SRK1_sha256_4096_65537_v3_ca_crt.pem,./SRK2_sha256_4096_65537_v3_ca_crt.pem,./SRK3_sha256_4096_65537_v3_ca_crt.pem,./SRK4_sha256_4096_65537_v3_ca_crt.pem -f 1
         
         
+###### IMX.6 based boards
+
 The hashes table that must be burned into the device to validate the public keys, can be generated from the fuse table above using the script:
 
         #!/bin/bash
@@ -105,11 +111,42 @@ The hashes table that must be burned into the device to validate the public keys
         fuse prog -y 3 6 0x3007BA2B
         fuse prog -y 3 7 0xDED88E4C 
         
-Once it's *absolutely* sure about what has been done so far and that  it works, you can “close” the device. 
+###### IMX.8 based boards
+
+get the values for the fuses with
+
+	$ hexdump -e '/4 "0x"' -e '/4 "%X""\n"' < SRK_1_2_3_4_fuse.bin
+	0x85CB70D5
+	0xE3064103
+	0xF372C459
+	0x94C7ECBD
+	0x3A98FD08
+	0xFBFC10C4
+	0x3007BA2B
+	0xDED88E4C
+
+which leads in the following U-Boot commands:
+
+	=> fuse prog -y 6 0 0x85CB70D5
+	=> fuse prog -y 6 1 0xE3064103
+	=> fuse prog -y 6 2 0xF372C459
+	=> fuse prog -y 6 3 0x94C7ECBD
+	=> fuse prog -y 7 0 0x3A98FD08
+	=> fuse prog -y 7 1 0xFBFC10C4
+	=> fuse prog -y 7 2 0x3007BA2B
+	=> fuse prog -y 7 3 0xDED88E4C
+
+Once it's *absolutely* sure about what has been done so far and that it works, you can “close” the device.
 
 This step is IRREVERSIBLE, better make sure there is no HAB Events in open mode configuration!!!!
 
+imx.6 case:
+
         fuse prog 0 6 0x2
+
+imx.8 case:
+
+	=> fuse prog 1 3 0x02000000
 
 * Signing Process:
 
@@ -136,7 +173,14 @@ This process is fully automated in Yocto by using the class uboot-hab-sign.bbcla
 
 U-Boot is signed then with developement Certificates/keys, For production the local.conf can be used to overwrite those settings by the productive ones.
 
-The outcome of the process is SPL.signed and  u-boot-ivt.img-spi.signed which can be used for verified boot.
+The outcome of the process is:
+
+| Image  | imx6 | imx8 |
+|--------|------|------|
+| SPL    | SPL.signed | SPL.signed |
+| U-Boot | u-boot-ivt.img-spi.signed | u-boot.itb.signed |
+
+:warning: In imx8 case, you need to build U-Boot with SPL_FIT_GENERATOR disabled. See more infos [i.MX8M HAB](imx8_hab.md)
 
 ## Signed Filesystem
 
@@ -255,6 +299,14 @@ And copy the resulting blob on a persistent device. The real key is never expose
 decrypted with the unique key of the device, so this procedure must be done for each produced
 device in the factory.
 
+#### raw key definitions
+
+define for example your raw key for the rootfs image:
+
+ENC_KEY_RAW ?= "fdf6842566d47e47d6874da561fec433"
+
+so the ```crypt-fs``` can use it. This key *never* should be lost!
+
 ### DCP usage
 
 see implementation details in *dcp_overview.pdf*
@@ -266,16 +318,6 @@ check the signature and if the signature is OK, we encrypt the
 FS image.
 
 See the initrd script: *recipes-core/initrdscripts/files/initramfs-init.sh*
-
-### raw key definitions
-
-define for example in your raw key for the rootfs image:
-
-ENC_KEY_RAW ?= "fdf6842566d47e47d6874da561fec433"
-
-It is used in script set_keyblob.sh
-
-to setup the key blob for rootfs encryption.
 
 ### setup
 
