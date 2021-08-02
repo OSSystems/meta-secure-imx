@@ -356,9 +356,9 @@ sign_spl() {
 	len=$(get_filelen $5/$4)
 	bbnote "block spl ${addr} $2 ${len} ${fn}"
 	blocks="$addr $2 $len \"${fn}\""
-	csf_emit_spl_file "$5/csf_spl.txt" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" CAAM
+	csf_emit_spl_file "$5/csf_spl_$3.txt" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" CAAM
 	# create signed data
-	cst -i $5/csf_spl.txt -o $5/csf_spl.bin
+	cst -i $5/csf_spl_$3.txt -o $5/csf_spl_$3.bin
 	# cst off in IVT header
 	# read cstoff from file (offset 0x18 4 bytes)
 	pos=$(hex2dec $2)
@@ -366,7 +366,7 @@ sign_spl() {
 	cstoff=$(od -xL -j $pos -N 4 $fn | sed -n '2 p' | xargs)
 	pos=$(hex2dec $2)
 	off=$(expr $cstoff - $basedec + $pos + 64)
-	dd if=$5/csf_spl.bin of=$fn seek=$off bs=1 conv=notrunc
+	dd if=$5/csf_spl_$3.bin of=$fn seek=$off bs=1 conv=notrunc
 }
 
 sign_all_spl() {
@@ -452,8 +452,7 @@ do_sign_uboot() {
 	fi
 }
 
-do_deploy_append() {
-
+deploy_nofit() {
         for config in ${UBOOT_MACHINE}; do
             i=$(expr $i + 1);
             for type in ${UBOOT_CONFIG}; do
@@ -467,6 +466,41 @@ do_deploy_append() {
             unset  j
         done
         unset  i
+}
+
+deploy_fit() {
+	if [ -n "${UBOOT_CONFIG}" ];then
+		bbwarn "do_deploy with UBOOT_CONFIG not implemented yet, please add."
+	else
+		install -D -m 644 ${bd}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX}
+		if [ -n "${SPL_BINARY}" ]; then
+			bbnote "install ${B}/${SPL_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX}"
+			install -m 644 ${B}/${SPL_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX}
+			rm -f ${DEPLOYDIR}/${SPL_BINARYNAME}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_SYMLINK}.${UBOOT_SIGN_SUFFIX}
+			ln -sf ${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_BINARYNAME}.${UBOOT_SIGN_SUFFIX}
+			ln -sf ${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_SYMLINK}.${UBOOT_SIGN_SUFFIX}
+		fi
+	fi
+}
+
+do_deploy_append() {
+
+	if [ "${HAB_ENABLE}" == "1" ];then
+		set_variables
+
+		# detect if we have to sign u-boot.itb image, which contains
+		# all infos we need for signing in image itself.
+		# Yet only IMX8M supported.
+		if [ ${CONFIG_IMX8M} == "y" ];then
+			if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
+				deploy_fit
+			fi
+		else
+			deploy_nofit
+		fi
+	else
+		bbwarn "HAB boot not enabled."
+	fi
 }
 
 addtask sign_uboot before do_install after do_compile
