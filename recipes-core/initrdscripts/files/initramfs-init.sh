@@ -20,15 +20,13 @@ ROOT_OPT="-o ro"
 MOUNT="/bin/mount"
 UMOUNT="/bin/umount"
 
+#include functions
+. /etc/default/initramfs
+
 # init
 if [ -z ${INIT} ];then
 	INIT=/sbin/init
 fi
-
-#include functions
-. /etc/default/initramfs
-
-VERBOSE="yes"
 
 mount_pseudo_fs() {
 	debug "Mount pseudo fs"
