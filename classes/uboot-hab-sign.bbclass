@@ -59,7 +59,7 @@ csf_assemble() {
 	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" CAAM
 }
 
-do_sign_uboot() {
+sign_uboot_nofit() {
 	for config in ${UBOOT_MACHINE}; do
 		cd ${B}/${config}
 		if [ -n "${SPL_BINARY}" ]; then
@@ -73,6 +73,15 @@ do_sign_uboot() {
 		cat ${UBOOT_BINARY} ${UBOOT_BINARY}.csf > ${UBOOT_BINARY}.tmp
 		mv ${UBOOT_BINARY}.tmp ${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX}
 	done
+}
+
+do_sign_uboot() {
+
+	if [ "${HAB_ENABLE}" == "1" ];then
+		sign_uboot_nofit
+	else
+		bbwarn "HAB boot not enabled."
+	fi
 }
 
 do_deploy_append() {
