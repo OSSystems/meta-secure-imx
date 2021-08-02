@@ -8,7 +8,7 @@
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
 MB=$((1024*1024))
-MAGIC="0x5353495f53435858" # SSI_SCXX
+MAGIC="0x44454e585f4d4743" # DENX_MGC
 MAGIC_LEN=8
 MAGIC_SIZE="4096"
 BIN_SIG=/tmp/bin.sig

@@ -54,7 +54,7 @@ OUTPUT="${IMAGE_NAME}${IMAGE_NAME_SUFFIX}.${type}.signed"
 MB="$(expr 1024 \* 1024)"
 
 # Magic marker such that the initramfs is able to find the signature
-MAGIC="SSI_SCXX"
+MAGIC="DENX_MGC"
 MAGIC_SIZE="4096"
 align_data_size() {
     FILE_SZ="$(stat -Lc%s "${1}")"
