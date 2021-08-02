@@ -4,6 +4,64 @@ python __anonymous () {
         d.appendVar("DEPENDS", " cst-native")
 }
 
+####################
+# common
+####################
+hex2dec() {
+	echo $(printf '%d' $1)
+}
+
+dec2hex() {
+	echo 0x$(printf '%x' $1)
+}
+
+set_bd_path() {
+	if [ -n "${UBOOT_CONFIG}" ]; then
+		bd=${B}/${config}
+	else
+		bd=${B}
+	fi
+}
+
+# $1 ... fit image name
+# $2 ... part of fit image
+fit_get_loadaddr() {
+	set -x
+	val=$(fdtget $1 /images/$2 load)
+	set +x
+	# dec -> hex
+	dec2hex $val
+}
+
+get_atf_loadaddr() {
+	if [ ! "${CONFIG_IMX8M}" ];then
+		return
+	fi
+
+	if [ ! ${bd}/u-boot.itb ];then
+		bbnote "u-boot.itb does not exist yet"
+		return
+	fi
+
+	atf_loadaddr=$(fit_get_loadaddr ${bd}/u-boot.itb "atf")
+	bbnote "ATF_LOAD_ADDR ${atf_loadaddr}"
+	export ATF_LOAD_ADDR=$atf_loadaddr
+}
+
+set_variables() {
+	set_bd_path
+	# source u-boot config so we can use the config symbols
+	# as variables
+	source ${bd}/.config
+
+	get_atf_loadaddr
+}
+
+
+####################
+# imx6 specific
+####################
+
 #
 # Emit the CSF File
 #
@@ -75,10 +133,39 @@ sign_uboot_nofit() {
 	done
 }
 
+#############################
+# u-boot.itb (imx8m) specific
+#############################
+
+sign_uboot_binman() {
+	bberr "sign u-boot.itb (imx8m) not supported yet."
+}
+
+######################
+# common entry points
+######################
+
+sign_uboot_common() {
+	set_variables
+
+	# detect if we have to sign u-boot.itb image, which contains
+	# all infos we need for signing in image itself.
+	# Yet only IMX8M supported.
+	if [ ${CONFIG_IMX8M} == "y" ];then
+		if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
+			sign_uboot_binman
+		else
+			bberror "CONFIG_IMX8M and CONFIG_USE_SPL_FIT_GENERATOR set. Do convert to unset CONFIG_USE_SPL_FIT_GENERATOR"
+		fi
+	else
+		sign_uboot_nofit
+	fi
+}
+
 do_sign_uboot() {
 
 	if [ "${HAB_ENABLE}" == "1" ];then
-		sign_uboot_nofit
+		sign_uboot_common
 	else
 		bbwarn "HAB boot not enabled."
 	fi
