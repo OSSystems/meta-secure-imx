@@ -12,7 +12,6 @@ S = "${WORKDIR}"
 do_install() {
         install -d ${D}${base_sbindir}
         install -m 0755 ${WORKDIR}/initramfs-init.sh ${D}${base_sbindir}/init
-	sed -i '/CRYPT_KEY=/c\CRYPT_KEY=\"${ENC_KEY_RAW}\"' ${D}${base_sbindir}/init
 }
 
 do_install_append() {
