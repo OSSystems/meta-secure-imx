@@ -404,7 +404,7 @@ sign_uboot_binman() {
 		aligned_off="$(perl -w ${bd}/get_align_size.pl ${fit_len})"
 		perl -w ${bd}/imx6-genIVT.pl $fit_addr `printf "0x%x" ${aligned_off}` ${bd}/gen.ivt.bin
 		bbnote "write IVT header ${bd}/gen.ivt.bin to $fn @ $aligned_off"
-		dd if=${bd}/gen.ivt.bin of=$fn seek=$aligned_off bs=1 conv=notrunc
+		dd if=${bd}/gen.ivt.bin of=$fn seek=$aligned_off bs=1 conv=notrunc conv=fsync
 
 		# create signed data
 		csf_emit_fit_file "${bd}/csf_fit.txt" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" CAAM
@@ -418,7 +418,7 @@ sign_uboot_binman() {
 		# align address to 0x1000
 		off=$(expr $aligned_off + 32)
 		bbnote "write csf data ${bd}/csf_fit.bin to $fn @ $off"
-		dd if=${bd}/csf_fit.bin of=$fn seek=$off bs=1 conv=notrunc
+		dd if=${bd}/csf_fit.bin of=$fn seek=$off bs=1 conv=notrunc conv=fsync
 	done
 }
 
@@ -504,3 +504,8 @@ do_deploy_append() {
 }
 
 addtask sign_uboot before do_install after do_compile
+
+# do_sign_uboot must also run before do_deploy
+python () {
+    d.appendVarFlag('do_deploy', 'depends', 'u-boot:do_sign_uboot')
+}
