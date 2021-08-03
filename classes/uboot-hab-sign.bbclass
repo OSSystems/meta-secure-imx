@@ -507,5 +507,5 @@ addtask sign_uboot before do_install after do_compile
 
 # do_sign_uboot must also run before do_deploy
 python () {
-    d.appendVarFlag('do_deploy', 'depends', 'u-boot:do_sign_uboot')
+    d.appendVarFlag('do_deploy', 'depends', 'virtual/bootloader:do_sign_uboot')
 }
