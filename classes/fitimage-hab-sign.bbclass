@@ -126,6 +126,7 @@ kernel_do_deploy_append() {
 			cp ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX}
 			rm -f ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.csf ${FITIMAGE}-ivt
 			install ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX}
+			ln -sf fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/${FITIMAGE}.${KERNEL_SIGN_SUFFIX}
 		else
 			bbwarn "${B}/arch/${ARCH}/boot/fitImage-${INITRAMFS_IMAGE} not found!"	
 		fi
