@@ -95,30 +95,3 @@ CONVERSION_CMD_signed() {
     mv ${WORK}.signed ${OUTPUT}
     rm -f ${WORK}*
 }
-
-do_sign_fs () {
-	SIGN_FS_IMAGE_NAME=${IMAGE_NAME}${IMAGE_NAME_SUFFIX}
-	echo "======= do_sign_fs setup ========="
-	echo "SIGN_FS_IMAGE_NAME " ${SIGN_FS_IMAGE_NAME}
-	echo "DEPLOY_DIR         " ${DEPLOY_DIR}
-	echo "DEPLOY_DIR_NAME    " ${DEPLOY_DIR_IMAGE}
-	echo "SIGN_KEY           " ${SIGN_KEY}
-	input=${DEPLOY_DIR_IMAGE}/${SIGN_FS_IMAGE_NAME}
-	work=${input}.tmp
-	output=${DEPLOY_DIR_IMAGE}/${SIGN_FS_IMAGE_NAME}.signed
-
-	echo "input  " ${input}
-	echo "work   " ${work}
-	echo "output " ${output}
-	echo "================="
-
-	cp ${input} ${work}
-	align_data_size ${work}
-	calc_digest ${work}
-	set_sig_area ${work}
-	set_magic ${work}
-	attach_signature ${work}
-	mv ${work}.signed ${output}
-	rm -f ${work}*
-}
-#addtask do_sign_fs after do_image_complete before do_populate_lic_deploy
