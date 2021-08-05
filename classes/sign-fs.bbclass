@@ -79,7 +79,10 @@ set_magic() {
 }
 
 attach_signature() {
-    openssl pkeyutl -sign -in ${DIGEST} -inkey ${SIGN_KEY} -out ${1}.sig -pkeyopt digest:sha256
+    if [ -n ${PASS_FILE} ];then
+	    extraparms="-passin file:${PASS_FILE}"
+    fi
+    openssl pkeyutl -sign -in ${DIGEST} -inkey ${SIGN_KEY} -out ${1}.sig ${extraparms} -pkeyopt digest:sha256
     base64 ${1}.sig > ${1}.b64
     dd if=${1}.b64 of=${1} seek=$(expr $(expr ${MAGIC_OFFSET} + ${MAGIC_SIZE}) / 4096) bs=4k count=1 conv=notrunc  > /dev/null 2>&1
     mv ${1} ${1}.signed
