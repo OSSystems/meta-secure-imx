@@ -1,3 +1,5 @@
+SPL_BINARIES ?= "${SPL_BINARY}"
+
 python __anonymous () {
 
     if d.getVar('HAB_ENABLE', True):
