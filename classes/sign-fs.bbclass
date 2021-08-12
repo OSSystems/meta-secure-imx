@@ -79,7 +79,7 @@ set_magic() {
 }
 
 attach_signature() {
-    if [ -n ${PASS_FILE} ];then
+    if [ -n "${PASS_FILE}" ];then
 	    extraparms="-passin file:${PASS_FILE}"
     fi
     openssl pkeyutl -sign -in ${DIGEST} -inkey ${SIGN_KEY} -out ${1}.sig ${extraparms} -pkeyopt digest:sha256
