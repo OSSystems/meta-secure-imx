@@ -76,7 +76,7 @@ set_variables() {
 	set_bd_path
 	# source u-boot config so we can use the config symbols
 	# as variables
-	source ${bd}/.config
+	. ${bd}/.config
 
 	get_atf_loadaddr
 }
@@ -287,10 +287,10 @@ EOF
 # $1 ... fit image name
 # $2 ... part of fit image
 create_block_line() {
-	if [ $2 == "uboot" ];then
+	if [ $2 = "uboot" ];then
 		addr=$CONFIG_SYS_TEXT_BASE
 	fi
-	if [ $2 == "fdt" ];then
+	if [ $2 = "fdt" ];then
 		ublen=$(fit_get_len $1 uboot)
 		ublen=$(hex2dec $ublen)
 		# addr = textbase + ublen
@@ -298,7 +298,7 @@ create_block_line() {
 		addr=$(expr $basedec + $ublen)
 		addr=$(dec2hex $addr)
 	fi
-	if [ $2 == "atf" ];then
+	if [ $2 = "atf" ];then
 		get_atf_loadaddr
 		addr=$atf_loadaddr
 	fi
@@ -434,7 +434,7 @@ sign_uboot_common() {
 	# detect if we have to sign u-boot.itb image, which contains
 	# all infos we need for signing in image itself.
 	# Yet only IMX8M supported.
-	if [ ${CONFIG_IMX8M} == "y" ];then
+	if [ ${CONFIG_IMX8M} = "y" ];then
 		if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
 			sign_uboot_binman
 		else
@@ -447,7 +447,7 @@ sign_uboot_common() {
 
 do_sign_uboot() {
 
-	if [ "${HAB_ENABLE}" == "1" ];then
+	if [ "${HAB_ENABLE}" = "1" ];then
 		sign_uboot_common
 	else
 		bbwarn "HAB boot not enabled."
@@ -487,13 +487,13 @@ deploy_fit() {
 
 do_deploy_append() {
 
-	if [ "${HAB_ENABLE}" == "1" ];then
+	if [ "${HAB_ENABLE}" = "1" ];then
 		set_variables
 
 		# detect if we have to sign u-boot.itb image, which contains
 		# all infos we need for signing in image itself.
 		# Yet only IMX8M supported.
-		if [ ${CONFIG_IMX8M} == "y" ];then
+		if [ ${CONFIG_IMX8M} = "y" ];then
 			if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
 				deploy_fit
 			fi
