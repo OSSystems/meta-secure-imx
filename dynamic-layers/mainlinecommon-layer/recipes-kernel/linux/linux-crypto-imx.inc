@@ -1,5 +1,3 @@
-FILESEXTRAPATHS_append := "${THISDIR}/linux-5.4:"
-
 SRC_URI_append = " \
   file://0001-arm-dts-Enable-mxs-dcp-by-default.patch \
   file://0002-crypto-mxs-dcp-Implement-reference-keys.patch \
@@ -7,11 +5,10 @@ SRC_URI_append = " \
   file://0004-KEYS-add-symmetric-key-test-module.patch \
   file://0005-KEYS-add-CAAM-based-symmetric-key-subtype.patch \
   file://0006-KEYS-add-DCP-based-symmetric-key-subtype.patch \
-  file://0007-dm-crypt-Add-a-global-keyring-for-symmetric-keys.patch \
+  file://0007-dm-crypt-Add-support-for-symmetric-keys.patch \
   file://0008-fscrypt-Add-support-for-key-types-other-than-logon.patch \
   file://0009-fscrypt-Enable-key-lookup-on-custom-keyring.patch \
   file://0010-ubifs-Add-mount-option-support-for-global-keyring.patch \
   file://0011-ubifs-allow-usage-of-symmetric-key-type-for-UBIFS-en.patch \
-  file://0012-security-keys-symmetric_keys-sym_dcp_key.c-fix-key-p.patch \
-  file://encryption.cfg \
+  file://0012-symmetric_keys-Fix-key-buffer-usage.patch \
 "
