@@ -18,8 +18,8 @@ dec2hex() {
 }
 
 set_bd_path() {
-	if [ -n "${UBOOT_CONFIG}" ]; then
-		bd=${B}/${config}
+	if [ -n "${UBOOT_MACHINE}" ]; then
+		bd=${B}/$(echo ${UBOOT_MACHINE} | xargs)
 	else
 		bd=${B}
 	fi
@@ -138,12 +138,18 @@ EOF
 # 
 csf_assemble() {
 	blocks="$(sed -n 's/HAB Blocks:[\t ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)/\1 \2 \3/p' ${2}.log)"
-	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" CAAM
+	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" "${CRYPTO_HW_ACCEL}"
 }
 
 sign_uboot_nofit() {
 	for config in ${UBOOT_MACHINE}; do
-		cd ${B}/${config}
+		echo "MACHINE: ${UBOOT_MACHINE}"
+		echo "CONFIG: ${UBOOT_CONFIG}"
+		if [ -z ${UBOOT_CONFIG} ]; then
+		   cd ${B}/
+		else
+		   cd ${B}/${config}
+		fi
 		if [ -n "${SPL_BINARY}" ]; then
 			csf_assemble ${SPL_BINARY}.csf ${SPL_BINARY}
 			cst --o ${SPL_BINARY}.csf --i ${SPL_BINARY}.csf
