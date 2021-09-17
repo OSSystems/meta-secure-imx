@@ -25,44 +25,43 @@ UMOUNT="/bin/umount"
 
 # init
 if [ -z ${INIT} ];then
-	INIT=/sbin/init
+    INIT=/sbin/init
 fi
 
 mount_pseudo_fs() {
-	debug "Mount pseudo fs"
-	${MOUNT} -t devtmpfs none /dev
-	${MOUNT} -t tmpfs tmp /tmp
-	${MOUNT} -t proc proc /proc
-	${MOUNT} -t sysfs sysfs /sys
+    debug "Mount pseudo fs"
+    ${MOUNT} -t devtmpfs none /dev
+    ${MOUNT} -t tmpfs tmp /tmp
+    ${MOUNT} -t proc proc /proc
+    ${MOUNT} -t sysfs sysfs /sys
 }
 
 umount_pseudo_fs() {
-	debug "Umount pseudo fs"
-	${UMOUNT} /dev
-	${UMOUNT} /tmp
-	${UMOUNT} /proc
-	${UMOUNT} /sys
+    debug "Umount pseudo fs"
+    ${UMOUNT} /dev
+    ${UMOUNT} /tmp
+    ${UMOUNT} /proc
+    ${UMOUNT} /sys
 }
 
 detect_imx_crypto_engine() {
-	crypt_acc="caam"
-	# detect if CAAM or DCP is the engine
-	cat /proc/crypto | grep -i dcp >/dev/null
-	if [ $? == 0 ];then
-		crypt_acc="dcp"
-	fi
+    crypt_acc="caam"
+    # detect if CAAM or DCP is the engine
+    cat /proc/crypto | grep -i dcp >/dev/null
+    if [ $? == 0 ];then
+	crypt_acc="dcp"
+    fi
 }
 
-error_exit() {
-    echo "ERROR: ${@}" > /dev/console
+debug_reboot() {
     if [ "$DEBUGSHELL" != "no" ]; then
-        echo "enter debugshell"
-        /bin/sh
+	echo "enter debugshell"
+	/bin/sh
     else
-        # wait 5 seconds then reboot
-        echo "Reboot in 5 seconds..." > /dev/console
-        sleep 5
-        reboot -f
+	# wait 5 seconds then reboot
+	echo "Reboot in 5 seconds..." > /dev/console
+	sleep 5
+	reboot -f
     fi
 }
 
@@ -72,37 +71,42 @@ error() {
 
 debug() {
     if [ "$VERBOSE" != "no" ]; then
-        echo "${@}"
+	echo "${@}"
     else
-        if [ "$ENABLELOG" != "no" ]; then
-            logger -s "${@}"
-        fi
+	if [ "$ENABLELOG" != "no" ]; then
+	    logger -s "${@}"
+	fi
     fi
 }
 
 parse_cmdline() {
-	#Parse kernel cmdline to extract base device path
-	CMDLINE="$(cat /proc/cmdline)"
-	debug "Kernel cmdline: $CMDLINE"
-	for c in ${CMDLINE}; do
-		if [ "${c:0:5}" == "root=" ]; then
-			ROOT_DEV="${c:5}"
-		fi
-	done
-	debug "ROOT_DEV $ROOT_DEV"
+    #Parse kernel cmdline to extract base device path
+    CMDLINE="$(cat /proc/cmdline)"
+    debug "Kernel cmdline: $CMDLINE"
 
-	grep enablelog /proc/cmdline > /dev/null
-	if [ $? -eq 0 ]; then
-		ENABLELOG="yes"
-	fi
-	grep debugshell /proc/cmdline > /dev/null
-	if [ $? -eq 0 ]; then
-		DEBUGSHELL="yes"
-	fi
-	grep enterinitramfs /proc/cmdline > /dev/null
-	if [ $? -eq 0 ]; then
-		ENTERINITRAMFS="yes"
-	fi
+	for c in ${CMDLINE}; do
+	    if [ "${c:0:5}" == "root=" ]; then
+		ROOT_DEV="${c:5}"
+	    fi
+	done
+    debug "ROOT_DEV $ROOT_DEV"
+
+    grep enablelog /proc/cmdline > /dev/null
+    if [ $? -eq 0 ]; then
+	ENABLELOG="yes"
+    fi
+    grep debugshell /proc/cmdline > /dev/null
+    if [ $? -eq 0 ]; then
+	DEBUGSHELL="yes"
+    fi
+    grep enterinitramfs /proc/cmdline > /dev/null
+    if [ $? -eq 0 ]; then
+	ENTERINITRAMFS="yes"
+    fi
+    grep -q 'boot_type=factory' /proc/cmdline
+    if [ $? -eq 0 ]; then
+	FACTORYSETUP="yes"
+    fi
 }
 
 mount_pseudo_fs
@@ -124,29 +128,29 @@ if [ "${ROOT_DEV}" == "" ] || [ "${ROOT_DEV}" == "/dev/nfs" ]; then
 fi
 
 find_magic_offset() {
-	if [ -z  ${MAGIC_OFFSET} ];then
-		MAGIC_OFFSET=0
+    if [ -z  ${MAGIC_OFFSET} ];then
+	MAGIC_OFFSET=0
+    fi
+    if [ -z ${MAX_SIZE} ];then
+	MAX_SIZE="$(lsblk -b -n $1 | awk '{print $4}')"
+    fi
+    while [ ${MAGIC_OFFSET} -lt ${MAX_SIZE} ]; do
+	var="$(hexdump -e '"0x" 8/1 "%02x"' ${1} -s ${MAGIC_OFFSET} -n ${MAGIC_LEN})"
+	if [[ "${var}" == "${MAGIC}" ]]; then
+	    debug "magic offset found @ ${MAGIC_OFFSET}"
+	    break
 	fi
-	if [ -z ${MAX_SIZE} ];then
-		MAX_SIZE="$(lsblk -b -n $1 | awk '{print $4}')"
-	fi
-	while [ ${MAGIC_OFFSET} -lt ${MAX_SIZE} ]; do
-		var="$(hexdump -e '"0x" 8/1 "%02x"' ${1} -s ${MAGIC_OFFSET} -n ${MAGIC_LEN})"
-		if [[ "${var}" == "${MAGIC}" ]]; then
-			debug "magic offset found @ ${MAGIC_OFFSET}"
-			break
-		fi
-		let "MAGIC_OFFSET += ${MB}"
-	done
-	if [[ "${MAGIC_OFFSET}" == "${MAX_SIZE}" ]]; then
-		echo "no magic offset found!"
-		error_exit
-	fi
+	let "MAGIC_OFFSET += ${MB}"
+    done
+    if [[ "${MAGIC_OFFSET}" == "${MAX_SIZE}" ]]; then
+	echo "no magic offset found!"
+	error_exit
+    fi
 }
 
 calc_digest() {
     (
-        dd if=${1} bs=1M count=$(expr ${MAGIC_OFFSET} / ${MB}) | openssl dgst -sha256 -binary -out ${BIN_DIGEST}
+	dd if=${1} bs=1M count=$(expr ${MAGIC_OFFSET} / ${MB}) | openssl dgst -sha256 -binary -out ${BIN_DIGEST}
     ) > /dev/null 2>&1
 }
 
@@ -169,9 +173,9 @@ check_key() {
     # currently we check, if there are 0xff only
     # if so we have no key
     if [ "${keystoredev}" == "spi" ]; then
-        mtd_debug read $storedevice $1 40 /tmp/keytmp > /dev/null
+	mtd_debug read $storedevice $1 40 /tmp/keytmp > /dev/null
     else
-        dd if=${keyblobpath} of=/tmp/keytmp bs=1 count=40
+	dd if=${keyblobpath} of=/tmp/keytmp bs=1 count=40
     fi
     md5sum /tmp/keytmp > /tmp/keytmp2
     # md5sum of 0xff for 40 bytes
@@ -221,34 +225,34 @@ encrypt_rootfs () {
 }
 
 wait_rootfs() {
-	# wait endless for rootfs, as WDT triggers if rootfs
-	# does not come up
-	debug "wait for root fs:  ${ROOT_FS} ..."
-	DEV=$(echo $1 | cut -d "/" -f 3)
-	debug "DEV ${DEV}"
+    # wait endless for rootfs, as WDT triggers if rootfs
+    # does not come up
+    debug "wait for root fs:  ${ROOT_FS} ..."
+    DEV=$(echo $1 | cut -d "/" -f 3)
+    debug "DEV ${DEV}"
 
-	BLKDEV=$(echo $DEV | cut -d "p" -f 1)
-	PARTDEV=$(echo $DEV | cut -d "p" -f 2)
-	debug "BLKDEV ${BLKDEV} partdev ${PARTDEV}"
+    BLKDEV=$(echo $DEV | cut -d "p" -f 1)
+    PARTDEV=$(echo $DEV | cut -d "p" -f 2)
+    debug "BLKDEV ${BLKDEV} partdev ${PARTDEV}"
 
-	LOOP="notset"
-	while [ $LOOP != "FOUND" ];do
-		sleep 0.5
-		LOOP=$(dmesg | grep $BLKDEV | grep p$PARTDEV | while IFS= read -r line ; do if echo $line | grep Kernel > /dev/null; then true; else echo "FOUND"; fi; done)
-	done
+    LOOP="notset"
+    while [ $LOOP != "FOUND" ];do
+	sleep 0.5
+	LOOP=$(dmesg | grep $BLKDEV | grep p$PARTDEV | while IFS= read -r line ; do if echo $line | grep Kernel > /dev/null; then true; else echo "FOUND"; fi; done)
+    done
 }
 
 ROOT_FS=$(findfs ${ROOT_DEV})
 wait_rootfs ${ROOT_FS}
 
 if [ "x${VERIFYROOTFS}" == "xno" ];then
-	echo "ROOTFS verification not required, skipping..."
+    echo "ROOTFS verification not required, skipping..."
 else
-	debug "Verifying root fs:  ${ROOT_FS} ..."
-	find_magic_offset ${ROOT_FS}
-	calc_digest ${ROOT_FS}
-	extract_signature ${ROOT_FS}
-	verify_signature ${ROOT_FS}
+    debug "Verifying root fs:  ${ROOT_FS} ..."
+    find_magic_offset ${ROOT_FS}
+    calc_digest ${ROOT_FS}
+    extract_signature ${ROOT_FS}
+    verify_signature ${ROOT_FS}
 fi
 
 encrypt_rootfs ${ROOT_DEV}
