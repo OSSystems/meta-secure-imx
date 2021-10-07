@@ -65,6 +65,11 @@ debug_reboot() {
     fi
 }
 
+error_exit() {
+    echo "ERROR: ${@}" > /dev/console
+    debug_reboot
+}
+
 error() {
     logger -t error -s "${@}"
 }
@@ -84,11 +89,14 @@ parse_cmdline() {
     CMDLINE="$(cat /proc/cmdline)"
     debug "Kernel cmdline: $CMDLINE"
 
+    # Only extract ROOT_DEV when it is not set previously
+    if [ ! -n ${ROOT_DEV} ]; then
 	for c in ${CMDLINE}; do
 	    if [ "${c:0:5}" == "root=" ]; then
 		ROOT_DEV="${c:5}"
 	    fi
 	done
+    fi
     debug "ROOT_DEV $ROOT_DEV"
 
     grep enablelog /proc/cmdline > /dev/null
@@ -109,23 +117,6 @@ parse_cmdline() {
     fi
 }
 
-mount_pseudo_fs
-detect_imx_crypto_engine
-
-# This is a custom fuction that MUST be provided
-load_key_blob
-
-echo "Initramfs Bootstrap..."
-parse_cmdline
-
-# Check root device
-debug "Root mnt   : ${ROOT_MNT}"
-debug "Root device: ${ROOT_DEV}"
-debug "Root opt   : ${ROOT_OPT}"
-
-if [ "${ROOT_DEV}" == "" ] || [ "${ROOT_DEV}" == "/dev/nfs" ]; then
-	error_exit
-fi
 
 find_magic_offset() {
     if [ -z  ${MAGIC_OFFSET} ];then
@@ -166,62 +157,95 @@ verify_signature() {
     openssl pkeyutl -verify -in ${BIN_DIGEST} -pubin -inkey ${PUB_KEY} -sigfile ${BIN_SIG} -pkeyopt digest:sha256 || error_exit
     rm -f ${SIGNATURE} ${BIN_SIG} ${BIN_DIGEST}
 }
+
 # $1: offset
 check_key() {
     key_found=0
-    # check if there is a key
-    # currently we check, if there are 0xff only
-    # if so we have no key
+    # check if key is stored
+    # Only 64B are read and the check is done against 0x00 or 0xFF
     if [ "${keystoredev}" == "spi" ]; then
 	mtd_debug read $storedevice $1 40 /tmp/keytmp > /dev/null
+    elif [ "${keystoredev}" == "mmc" ]; then
+	dd if=/dev/mmcblk${keystoremmcdev}${keystoremmcpart} of=/tmp/keytmp_tmp bs=512 skip=${1} count=1 2>/dev/null
+	dd if=/tmp/keytmp_tmp of=/tmp/keytmp bs=1 count=40 2>/dev/null
     else
 	dd if=${keyblobpath} of=/tmp/keytmp bs=1 count=40
     fi
     md5sum /tmp/keytmp > /tmp/keytmp2
-    # md5sum of 0xff for 40 bytes
+    # md5sum of 0xff (SPI-NOR)
     grep 5c7191c0bf59f6d17bbe1bb4bf222e6b /tmp/keytmp2
-    if [ $? -ne 0 ];then
-        key_found=1
+    if [ $? -ne 0 ]; then
+	# md5sum of 0x00 (eMMC) for 40 bytes
+	grep fd4b38e94292e00251b9f39c47ee5710 /tmp/keytmp2
+	[ $? -ne 0 ] && key_found=1
     fi
+
     rm /tmp/keytmp*
 }
 
+mount_pseudo_fs
+detect_imx_crypto_engine
+
+# This is a custom fuction that MUST be provided
+load_key_blob
+get_root_dev_path
+
+echo "Initramfs Bootstrap..."
+parse_cmdline
+
+if [ "${FACTORYSETUP}" == "yes" ]; then
+    if [ -f  /etc/functions_factory ]; then
+	. /etc/functions_factory
+	factory_setup
+	debug_reboot
+    fi
+fi
+
+# Check root device
+debug "Root mnt   : ${ROOT_MNT}"
+debug "Root device: ${ROOT_DEV}"
+debug "Root opt   : ${ROOT_OPT}"
+
+if [ "${ROOT_DEV}" == "" ] || [ "${ROOT_DEV}" == "/dev/nfs" ]; then
+    error_exit
+fi
+
 encrypt_rootfs () {
-        debug "encrypt rootfs " $1
+    debug "encrypt rootfs " $1
 
-	if [ "${ENTERINITRAMFS}" == "yes" ];then
-		echo "enter initramfs shell"
-	        /bin/sh
-	fi
+    if [ "${ENTERINITRAMFS}" == "yes" ];then
+	echo "enter initramfs shell"
+	/bin/sh
+    fi
 
-	if [ "${USEENCRYPTED}" == "no" ];then
-		debug "rootfs not encrypted"
-		mkdir -p ${ROOT_MNT}
-		mount -t squashfs ${ROOT_OPT} $1 ${ROOT_MNT}
-		return
-	fi
-
-	## Load dm-crypt.ko, it will create a special keyring for our caam key
-	insmod /lib/modules/$(uname -r)/kernel/drivers/md/dm-crypt.ko
-
-	## Load the blob into dcp/caam
-	echo "LOAD keyblob no keyid"
-	keyctl add symmetric "mydiskkey" "${crypt_acc} load_blob $(cat $keyblobpath | tr -d '\0')" @u
-	echo "DONE ----------------------" $?
-	keyctl show -x
-	keyctl show -x @us
-
-	## Activate the DM-Crypt disk, $1 is the encrypted block device
-	cryptsetup open -s 128 -c aes-cbc-essiv:sha256 --type plain --key-desc mydiskkey $1 cr_disk > /dev/null
-
-	## mount it
+    if [ "${USEENCRYPTED}" == "no" ];then
+	debug "rootfs not encrypted"
 	mkdir -p ${ROOT_MNT}
-	mount ${ROOT_OPT} /dev/mapper/cr_disk ${ROOT_MNT}
+	mount -t squashfs ${ROOT_OPT} $1 ${ROOT_MNT}
+	return
+    fi
 
-	if [ $? != 0 ];then
-		echo "Error mounting rootfs"
-		error_exit
-	fi
+    ## Load dm-crypt.ko, it will create a special keyring for our caam key
+    insmod /lib/modules/$(uname -r)/kernel/drivers/md/dm-crypt.ko
+
+    ## Load the blob into dcp/caam
+    echo "LOAD keyblob no keyid"
+    keyctl add symmetric "mydiskkey" "${crypt_acc} load_blob $(cat ${keyblobpath} | tr -d '\0')" @u
+    echo "DONE ----------------------" $?
+    keyctl show -x
+    keyctl show -x @us
+
+    ## Activate the DM-Crypt disk, $1 is the encrypted block device
+    cryptsetup open -s 128 -c aes-cbc-essiv:sha256 --type plain --key-desc mydiskkey $1 cr_disk > /dev/null
+
+    ## mount it
+    mkdir -p ${ROOT_MNT}
+    mount ${ROOT_OPT} /dev/mapper/cr_disk ${ROOT_MNT}
+
+    if [ $? != 0 ];then
+	echo "Error mounting rootfs"
+	error_exit
+    fi
 }
 
 wait_rootfs() {
@@ -242,8 +266,11 @@ wait_rootfs() {
     done
 }
 
-ROOT_FS=$(findfs ${ROOT_DEV})
-wait_rootfs ${ROOT_FS}
+# Only wait for rootfs to be up for SPI-NOR
+if [ "${keystoredev}" == "spi" ]; then
+    ROOT_FS=$(findfs ${ROOT_DEV})
+    wait_rootfs ${ROOT_FS}
+fi
 
 if [ "x${VERIFYROOTFS}" == "xno" ];then
     echo "ROOTFS verification not required, skipping..."

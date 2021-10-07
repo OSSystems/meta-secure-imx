@@ -1,0 +1,180 @@
+#! /bin/sh
+#
+# Some board specific functions and variables
+# are defined in /etc/initramfs file
+#
+#set -x
+
+CRYPT_KEY=""
+
+#
+# The CRYPT_KEY_FILE shall be set in the board specific initramfs
+# file.
+load_crypt_key() {
+    echo "Load crypt key to the board"
+
+    factory_get_file ${CRYPT_KEY_FILE} || return 1
+
+    if [ -f /tmp/${CRYPT_KEY_FILE} ]; then
+	CRYPT_KEY=$(cat /tmp/${CRYPT_KEY_FILE})
+	return
+    fi
+
+    [ -z ${CRYPT_KEY} ] && { echo "CRYPT KEY not provided!"; return 1; }
+}
+
+#
+# MAC_ADDR_FILE shall be set in the board specific initramfs
+# file.
+program_mac_fuses() {
+
+    factory_get_file ${MAC_ADDR_FILE} || return 1
+
+    [ -f /tmp/${MAC_ADDR_FILE} ] || { echo "No ${MAC_ADDR_FILE}!"; return 1; }
+
+    mac=$(cat /tmp/${MAC_ADDR_FILE})
+    echo "Program MAC: ${mac}"
+
+    m=${mac#*":"}
+    mac5=${mac%%":"*}
+
+    mac4=${m%%":"*}
+    m=${m#*":"}
+
+    mac3=${m%%":"*}
+    m=${m#*":"}
+
+    mac2=${m%%":"*}
+    m=${m#*":"}
+
+    mac1=${m%%":"*}
+    m=${m#*":"}
+
+    mac0=${m}
+
+    echo -en "\x${mac0}\x${mac1}\x${mac2}\x${mac3}" > /tmp/mac0
+    echo -en "\x${mac4}\x${mac5}\x0\x0" > /tmp/mac1
+
+    hexdump -e '"0x%04x\n"' /tmp/mac0
+    hexdump -e '"0x%04x\n"' /tmp/mac1
+
+    imx_fuse_write 34 /tmp/mac0
+    imx_fuse_write 35 /tmp/mac1
+
+    rm /tmp/mac*
+}
+
+set_ro_on_mmcboot() {
+     if [ ${1} == "0" ]; then
+	 echo "Setting mmcblk1boot${1} to RO"
+     fi
+}
+
+# Here the SRK_1_2_3_4_fuse.bin file needs to be written
+SRK_BIN="SRK_1_2_3_4_fuse.bin"
+write_key_signature() {
+    echo "Program SRK key to FUSEs"
+    echo "Current SRK bin data:"
+    imx_fuse_read 24 8
+
+    factory_get_file ${SRK_BIN}
+    [ -f /tmp/${SRK_BIN} ] || { echo "No ${SRK_BIN}!"; return 1; }
+
+    echo "To FUSE SRK bin data:"
+    hexdump -e '"0x%04x\n"' /tmp/${SRK_BIN}
+
+    imx_fuse_write 24 /tmp/${SRK_BIN}
+}
+
+enable_secure_boot() {
+    echo "ENABLE SECURE BOOT (NON REVISIBLE)!!!"
+}
+
+# load key blob into $keyblobpath
+# check, if key is valid (calculate md5sum and check
+# if it is != dc6c58c971715e8043baef058b675eec
+# which is the md5sum, if key contains only 0xff)
+#
+# Currently, if key is invalid, we create the key
+# but this must be removed for production initramfs
+# as CRYPT_KEY contains the raw key, which never
+# should be visible.
+create_key_blob() {
+    # we always read the key
+    # Load the keyblob from storage device to $keyblobpath
+    # dmcrypt dcp blob @ 0 size = $keysize bytes
+    if [ "${keystoredev}" == "spi" ]; then
+	mtd_debug read $storedevice 0x0 $keysize $keyblobpath > /dev/null
+	if [ $? -ne 0 ];then
+	    error_exit "Could not read key from "$storedevice
+	fi
+    elif [ "${keystoredev}" == "mmc" ]; then
+	dd if=/dev/mmcblk${keystoremmcdev}${keystoremmcpart} of=/tmp/keytmp_tmp bs=512 skip=${keyoffset} count=1 2>/dev/null
+	dd if=/tmp/keytmp_tmp of=${keyblobpath} bs=1 count=40 2>/dev/null
+    else
+	debug "encryption SD storepath   : ${storepath} file: ${keyblobpath}"
+	ls -1 ${keyblobpath} > /dev/null
+	if [ $? -ne 0 ];then
+	    debug "create dummy key file"
+	    # filled with 0xff
+	    dd if=/dev/zero bs=1 count=${keysize} | tr '\000' '\377' > ${keyblobpath}
+	    hexdump -C ${keyblobpath}
+	fi
+    fi
+
+    check_key ${keyoffset}
+    if [ $key_found -eq 1 ];then
+	debug "found rootfs key, do not create key"
+	return
+    fi
+
+    debug "Create rootfs ${crypt_acc} blob"
+    # check if dm-crypt is loaded
+    lsmod > /tmp/gnlmpf
+    grep -lr dm_crypt /tmp/gnlmpf
+    if [ $? != 0 ]; then
+	insmod /lib/modules/$(uname -r)/kernel/drivers/md/dm-crypt.ko
+	if [ $? != 0 ]; then
+	    error_exit "Could not load dm-crypt"
+	fi
+    fi
+
+    # Create dmcrypt blob for rootfs
+    # get this from machine config or download
+    [ -z ${CRYPT_KEY} ] && error_exit "CRYPT_KEY not set!"
+
+    debug "Crypt KEY "$CRYPT_KEY
+    key_id=$(keyctl add symmetric rootfs_key "${crypt_acc} load_plain ${CRYPT_KEY}" @u)
+    debug "KEY ID "$key_id
+    keyctl pipe $key_id > $keyblobpath
+    if [ $? != 0 ]; then
+	error_exit "Failed to pipe out key to " $keyblobpath
+    fi
+
+    #store the blob now in storage device
+    if [ "${keystoredev}" == "spi" ]; then
+	mtd_debug erase $storedevice 0x0 0x1000
+	dd if=$keyblobpath of=$storedevice > /dev/null
+	if [ $? != 0 ]; then
+	    error_exit "Failed to write ${crypt_acc} keyblob"
+	fi
+    elif [ "${keystoredev}" == "mmc" ]; then
+	echo 0 > /sys/block/mmcblk${keystoremmcdev}${keystoremmcpart}/force_ro
+	dd if=${keyblobpath} of=/dev/mmcblk${keystoremmcdev}${keystoremmcpart} bs=512 seek=${keyoffset} count=1 2>/dev/null
+	echo 1 > /sys/block/mmcblk${keystoremmcdev}${keystoremmcpart}/force_ro
+    fi
+}
+
+#
+# Set factory
+#
+factory_setup() {
+    echo -n "In-factory setup: "
+    load_crypt_key || { echo "FAIL!"; return 1; }
+    program_mac_fuses || { echo "FAIL!"; return 1; }
+    create_key_blob
+    write_key_signature || { echo "FAIL!"; return 1; }
+    set_ro_on_mmcboot 0
+    enable_secure_boot
+    echo "OK"
+}
