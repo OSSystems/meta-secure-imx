@@ -59,6 +59,7 @@ EOF
 # $4 ... Image Key File
 # $5 ... Blocks Parameter
 # $6 ... Image File
+# $7 ... Crypto engine
 csf_emit_file() {
 	cat << EOF > ${1}
 [Header]
@@ -67,7 +68,7 @@ Hash Algorithm = sha256
 Engine Configuration = 0
 Certificate Format = X509
 Signature Format = CMS
-Engine = CAAM
+Engine = ${7}
 
 [Install SRK]
 File = "${2}"
@@ -88,7 +89,7 @@ Verification index = 2
 Blocks = ${5} "${6}"
 
 [Unlock]
-Engine = CAAM
+Engine = ${7}
 Features = RNG
 EOF
 }
@@ -108,7 +109,7 @@ csf_assemble() {
 	IMG_SIGN_AREA_SIZE=$(printf "0x%x" `wc -c < ${2}`)
 	blocks="${RAM_AUTH_AREA_START}   ${IMG_SIGN_AREA_START}   ${IMG_SIGN_AREA_SIZE}"
 
-	csf_emit_file ${1} ${SRKTAB} ${CSFK} ${SIGN_CERT} "${blocks}" ${2}
+	csf_emit_file ${1} ${SRKTAB} ${CSFK} ${SIGN_CERT} "${blocks}" ${2} "${CRYPTO_HW_ACCEL}"
 }
 
 kernel_do_deploy_append() {
