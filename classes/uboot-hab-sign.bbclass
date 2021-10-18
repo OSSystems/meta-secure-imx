@@ -440,7 +440,7 @@ sign_uboot_common() {
 	# detect if we have to sign u-boot.itb image, which contains
 	# all infos we need for signing in image itself.
 	# Yet only IMX8M supported.
-	if [ ${CONFIG_IMX8M} = "y" ];then
+	if [ "${CONFIG_IMX8M}" = "y" ];then
 		if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
 			sign_uboot_binman
 		else
