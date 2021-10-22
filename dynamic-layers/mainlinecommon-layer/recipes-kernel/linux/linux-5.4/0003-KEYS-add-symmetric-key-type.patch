@@ -1,0 +1,547 @@
+From 6dfe3a23419cf1f9e81cebf759a7598fff0435d2 Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Thu, 22 Nov 2018 10:41:58 +0100
+Subject: [PATCH 03/12] KEYS: add symmetric key type
+
+This adds a new key type for symmetric cryptography keys. It is similar
+to the asymmetric key type where the actual semantics of the key are
+implemented by subtypes.
+
+The subtype is responsible for parsing and encapsulating the key payload
+when the key is loaded and exported from and to userspace respectively.
+
+This adds an initial memory subtype which holds the secret key in kernel
+memory and exports it in plaintext to the userspace. Future subtypes
+will use hardware to seal and unseal the key and hold the secret key in
+a separate secured memory.
+
+Signed-off-by: David Gstir <david@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ include/keys/symmetric-subtype.h              |  65 ++++++++++
+ include/keys/symmetric-type.h                 |  29 +++++
+ security/keys/Kconfig                         |   2 +
+ security/keys/Makefile                        |   1 +
+ security/keys/symmetric_keys/Kconfig          |  22 ++++
+ security/keys/symmetric_keys/Makefile         |   9 ++
+ security/keys/symmetric_keys/sym_memory_key.c | 157 +++++++++++++++++++++++
+ security/keys/symmetric_keys/symmetric_type.c | 171 ++++++++++++++++++++++++++
+ 8 files changed, 456 insertions(+)
+ create mode 100644 include/keys/symmetric-subtype.h
+ create mode 100644 include/keys/symmetric-type.h
+ create mode 100644 security/keys/symmetric_keys/Kconfig
+ create mode 100644 security/keys/symmetric_keys/Makefile
+ create mode 100644 security/keys/symmetric_keys/sym_memory_key.c
+ create mode 100644 security/keys/symmetric_keys/symmetric_type.c
+
+diff --git a/include/keys/symmetric-subtype.h b/include/keys/symmetric-subtype.h
+new file mode 100644
+index 000000000000..764f9f8314ff
+--- /dev/null
++++ b/include/keys/symmetric-subtype.h
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Symmetric cryptography key type
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ */
++
++#ifndef _KEYS_SYMMETRIC_SUBTYPE_H
++#define _KEYS_SYMMETRIC_SUBTYPE_H
++
++#ifdef CONFIG_SYMMETRIC_KEYS
++
++#include <keys/symmetric-type.h>
++#include <linux/types.h>
++
++/*
++ * Subtype interface for generic symmetric key type.
++ */
++struct symmetric_key_subtype {
++	struct list_head	link;
++	struct module		*owner;
++	const char		*name;
++	unsigned short		name_len;
++
++	/* destroy key of this subtype */
++	void (*destroy)(void *payload_crypto);
++
++	/* parse key of this subtype */
++	int (*preparse)(struct key_preparsed_payload *prep);
++
++	/* export key to userspace, possibly in encrypted form. (optional) */
++	long (*read)(void *payload_crypto, char __user *buffer, size_t buflen);
++
++	/* get key reference */
++	void (*get_keyref)(void *payload_crypto, const u8 **keyref_out,
++			   unsigned int *keyref_len);
++};
++
++int register_symmetric_key_subtype(struct symmetric_key_subtype *subtype);
++void unregister_symmetric_key_subtype(struct symmetric_key_subtype *subtype);
++
++static inline
++struct symmetric_key_subtype *symmetric_key_subtype(const struct key *key)
++{
++	return key->payload.data[sym_subtype];
++}
++
++static inline
++int symmetric_key_keyref(const struct key *key, const u8 **keyref_buf,
++			  unsigned int *keyref_len)
++{
++	void *p = key->payload.data[sym_crypto];
++	struct symmetric_key_subtype *subtype = symmetric_key_subtype(key);
++	if (!p || !subtype)
++		return -EINVAL;
++
++	subtype->get_keyref(p, keyref_buf, keyref_len);
++
++	return 0;
++}
++
++#endif /* CONFIG_SYMMETRIC_KEYS */
++
++#endif /* _KEYS_SYMMETRIC_SUBTYPE_H */
+diff --git a/include/keys/symmetric-type.h b/include/keys/symmetric-type.h
+new file mode 100644
+index 000000000000..12e434f30411
+--- /dev/null
++++ b/include/keys/symmetric-type.h
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Symmetric cryptography key type interface
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ */
++
++#ifndef _KEYS_SYMMETRIC_TYPE_H
++#define _KEYS_SYMMETRIC_TYPE_H
++
++#ifdef CONFIG_SYMMETRIC_KEYS
++
++#include <linux/key-type.h>
++
++extern struct key_type key_type_symmetric;
++
++/*
++ * The key payload is two words. They are used as follows by the symmetric-type
++ * key:
++ */
++enum symmetric_payload_bits {
++	sym_crypto,		/* Pointer to the actual cryptographic key data */
++	sym_subtype		/* Pointer to the symmetric_key_subtype struct of this key */
++};
++
++#endif /* CONFIG_SYMMETRIC_KEYS */
++
++#endif /* _KEYS_SYMMETRIC_TYPE_H */
+diff --git a/security/keys/Kconfig b/security/keys/Kconfig
+index dd313438fecf..6514a0f04921 100644
+--- a/security/keys/Kconfig
++++ b/security/keys/Kconfig
+@@ -120,3 +120,5 @@ config KEY_DH_OPERATIONS
+ 	 in the kernel.
+ 
+ 	 If you are unsure as to whether this is required, answer N.
++
++source security/keys/symmetric_keys/Kconfig
+diff --git a/security/keys/Makefile b/security/keys/Makefile
+index 9cef54064f60..e0623122ecdd 100644
+--- a/security/keys/Makefile
++++ b/security/keys/Makefile
+@@ -30,3 +30,4 @@ obj-$(CONFIG_ASYMMETRIC_KEY_TYPE) += keyctl_pkey.o
+ obj-$(CONFIG_BIG_KEYS) += big_key.o
+ obj-$(CONFIG_TRUSTED_KEYS) += trusted.o
+ obj-$(CONFIG_ENCRYPTED_KEYS) += encrypted-keys/
++obj-$(CONFIG_SYMMETRIC_KEYS) += symmetric_keys/
+diff --git a/security/keys/symmetric_keys/Kconfig b/security/keys/symmetric_keys/Kconfig
+new file mode 100644
+index 000000000000..1a934ac2af22
+--- /dev/null
++++ b/security/keys/symmetric_keys/Kconfig
+@@ -0,0 +1,22 @@
++# SPDX-License-Identifier: GPL-2.0
++menuconfig SYMMETRIC_KEYS
++	bool "Symmetric cryptography key type"
++	depends on KEYS
++	select CRYPTO_BLKCIPHER
++	help
++	  This option provides support for a key type that holds the data for
++	  the keys used for symmetric  cryptographic operations such
++	  as encryption, decryption, authentication creation and verification.
++
++if SYMMETRIC_KEYS
++
++config SYMMETRIC_KEYS_MEMORY_SUBTYPE
++	tristate "Symmetric in-memory subtype"
++	help
++	  This option provides support for symmetric key subtype which is
++	  held in kernel memory. This is basically identical to the logon
++	  key type except it is usable for encrypt and decrypt operations
++	  through the crypto API.
++
++
++endif # SYMMETRIC_KEYS
+diff --git a/security/keys/symmetric_keys/Makefile b/security/keys/symmetric_keys/Makefile
+new file mode 100644
+index 000000000000..bffcb9ed8e8c
+--- /dev/null
++++ b/security/keys/symmetric_keys/Makefile
+@@ -0,0 +1,9 @@
++# SPDX-License-Identifier: GPL-2.0
++#
++# Makefile for symmetric cryptographic keys
++#
++
++obj-$(CONFIG_SYMMETRIC_KEYS) += symmetric_type.o
++
++obj-$(CONFIG_SYMMETRIC_KEYS_MEMORY_SUBTYPE) += sym_memory_key.o
++
+diff --git a/security/keys/symmetric_keys/sym_memory_key.c b/security/keys/symmetric_keys/sym_memory_key.c
+new file mode 100644
+index 000000000000..4662caa2db0c
+--- /dev/null
++++ b/security/keys/symmetric_keys/sym_memory_key.c
+@@ -0,0 +1,157 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Symmetric cryptography in-memory subtype
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ */
++
++#include <keys/symmetric-subtype.h>
++#include <linux/export.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++
++struct symmetric_key_subtype sym_memory_subtype;
++
++
++struct sym_memory_key_payload {
++	// XXX rcu_head as in user_key_payload needed?
++	unsigned int datalen;
++	char data[0];
++};
++
++static void sym_memory_destroy(void *payload_crypto)
++{
++	struct sym_memory_ley_payload *payload = payload_crypto;
++
++	if (!payload)
++		return;
++	kzfree(payload);
++}
++
++static int sym_memory_preparse(struct key_preparsed_payload *prep)
++{
++	int ret;
++	size_t datalen = prep->datalen;
++	char *datablob;
++	char *c;
++	char *blob;
++	struct sym_memory_key_payload *payload;
++	size_t payload_len;
++
++	// TODO why magic constant 32767?
++	if (datalen <= 0 || datalen > 32767 || !prep->data)
++		return -EBADMSG;
++
++	datablob = kmalloc(datalen + 1, GFP_KERNEL);
++	if (!datablob)
++		return -ENOMEM;
++	memcpy(datablob, prep->data, datalen);
++	datablob[datalen] = '\0';
++
++	blob = datablob;
++
++	/* first argument is subkey type */
++	c = strsep(&blob, " \t");
++	if (!c || strcmp(sym_memory_subtype.name, c) != 0) {
++		ret = -EBADMSG;
++		goto out;
++	}
++
++	/* second argument is key payload in hex */
++	c = strsep(&blob, " \t");
++	if (!c) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	payload_len = strlen(c) / 2;
++	payload = kmalloc(sizeof(*payload) + payload_len, GFP_KERNEL);
++	if (!payload) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	ret = hex2bin(payload->data, c, payload_len);
++	if (ret) {
++		kzfree(payload);
++		goto out;
++	}
++	payload->datalen = payload_len;
++
++	// XXX do we really need that? is datalen the correct value?
++	prep->quotalen = datalen;
++	prep->payload.data[sym_crypto] = payload;
++	prep->payload.data[sym_subtype] = &sym_memory_subtype;
++	ret = 0;
++out:
++	kzfree(datablob);
++	return ret;
++}
++
++static long sym_memory_read(void *payload_crypto, char __user *buffer,
++			    size_t buflen)
++{
++	struct sym_memory_key_payload *p = payload_crypto;
++	size_t hexbuf_len = (2 * p->datalen) + 1;
++	char *hexbuf;
++	long ret;
++
++	if (!buffer || buflen < hexbuf_len)
++		return hexbuf_len;
++
++	hexbuf = kmalloc(hexbuf_len, GFP_KERNEL);
++	if (!hexbuf)
++		return -ENOMEM;
++
++	hexbuf[hexbuf_len - 1] = '\0';
++	bin2hex(hexbuf, p->data, p->datalen);
++
++	if (copy_to_user(buffer, hexbuf, hexbuf_len) != 0) {
++		ret = -EFAULT;
++		goto out;
++	}
++
++	ret = hexbuf_len;
++out:
++	kzfree(hexbuf);
++	return ret;
++}
++
++static void sym_memory_get_keyref(void *payload_crypto, const u8 **keyref_out,
++				 unsigned int *keyref_len)
++{
++	struct sym_memory_key_payload *p = payload_crypto;
++
++	*keyref_out = p->data;
++	*keyref_len = p->datalen;
++}
++
++struct symmetric_key_subtype sym_memory_subtype = {
++	.owner		= THIS_MODULE,
++	.name		= "memory",
++	.destroy	= sym_memory_destroy,
++	.preparse	= sym_memory_preparse,
++	.read		= sym_memory_read,
++	.get_keyref	= sym_memory_get_keyref
++};
++EXPORT_SYMBOL_GPL(sym_memory_subtype);
++
++static int __init sym_memory_subtype_init(void)
++{
++	return register_symmetric_key_subtype(&sym_memory_subtype);
++}
++
++static void __exit sym_memory_subtype_exit(void)
++{
++	unregister_symmetric_key_subtype(&sym_memory_subtype);
++}
++
++module_init(sym_memory_subtype_init);
++module_exit(sym_memory_subtype_exit);
++
++MODULE_DESCRIPTION("In-memory symmetric key type");
++MODULE_AUTHOR("sigma star gmbh");
++MODULE_LICENSE("GPL v2");
+diff --git a/security/keys/symmetric_keys/symmetric_type.c b/security/keys/symmetric_keys/symmetric_type.c
+new file mode 100644
+index 000000000000..afaec6e597ac
+--- /dev/null
++++ b/security/keys/symmetric_keys/symmetric_type.c
+@@ -0,0 +1,171 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Symmetric cryptography key type
++ *
++ * Copyright (C) 2018 sigma star gmbh
++ * Written by David Gstir <david@sigma-star.at>
++ */
++
++#include <keys/symmetric-subtype.h>
++#include <linux/export.h>
++#include <linux/printk.h>
++#include <linux/list.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++
++static LIST_HEAD(symmetric_key_subtypes);
++static DECLARE_RWSEM(symmetric_key_subtypes_sem);
++
++static struct symmetric_key_subtype *find_subtype_locked(const char *name)
++{
++	struct symmetric_key_subtype *cursor;
++	bool match = false;
++
++	if (!name)
++		return NULL;
++
++	list_for_each_entry(cursor, &symmetric_key_subtypes, link) {
++		if (strcmp(cursor->name, name) == 0) {
++			match = true;
++			break;
++		}
++	}
++
++	return match ? cursor : NULL;
++}
++
++static int symmetric_key_preparse(struct key_preparsed_payload *prep)
++{
++	struct symmetric_key_subtype *cursor;
++	int ret;
++
++	down_read(&symmetric_key_subtypes_sem);
++
++	// XXX parse first word (subtype name) here and only hand rest of
++	// payload to subtype instead?
++
++	ret = -EBADMSG;
++	list_for_each_entry(cursor, &symmetric_key_subtypes, link) {
++		pr_debug("Trying subtype '%s'\n", cursor->name);
++
++		ret = cursor->preparse(prep);
++		if (ret != -EBADMSG) {
++			pr_debug("Subtype accepted format (ret %d)\n", ret);
++			break;
++		}
++	}
++
++	up_read(&symmetric_key_subtypes_sem);
++
++	return ret;
++}
++
++static void symmetric_key_free_preparse(struct key_preparsed_payload *prep)
++{
++	struct symmetric_key_subtype *subtype = prep->payload.data[sym_subtype];
++
++	if (subtype) {
++		subtype->destroy(prep->payload.data[sym_crypto]);
++		module_put(subtype->owner);
++	}
++
++	kfree(prep->description);
++}
++
++static void symmetric_key_destroy(struct key *key)
++{
++	struct symmetric_key_subtype *subtype = key->payload.data[sym_subtype];
++	void *data = key->payload.data[sym_crypto];
++
++	key->payload.data[sym_crypto] = NULL;
++	key->payload.data[sym_subtype] = NULL;
++
++	if (subtype) {
++		subtype->destroy(data);
++		module_put(subtype->owner);
++	}
++}
++
++static long symmetric_key_read(const struct key *key, char __user *buffer,
++			       size_t buflen)
++{
++	struct symmetric_key_subtype *subtype = key->payload.data[sym_subtype];
++	void *payload_crypto;
++
++	if (!subtype || !subtype->read)
++		return -EOPNOTSUPP;
++
++	// XXX why not dereference_key_locked(key)?!
++	payload_crypto = key->payload.data[sym_crypto];
++	if (!payload_crypto) {
++		pr_err("Key has no readable payload!\n");
++		// XXX different error code?
++		return -EINVAL;
++	}
++
++	return subtype->read(payload_crypto, buffer, buflen);
++}
++
++struct key_type key_type_symmetric = {
++	.name			= "symmetric",
++	.preparse		= symmetric_key_preparse,
++	.free_preparse		= symmetric_key_free_preparse,
++	.instantiate		= generic_key_instantiate,
++	.destroy		= symmetric_key_destroy,
++	.read			= symmetric_key_read,
++};
++EXPORT_SYMBOL_GPL(key_type_symmetric);
++
++int register_symmetric_key_subtype(struct symmetric_key_subtype *subtype)
++{
++	struct symmetric_key_subtype *existing;
++	int ret;
++
++	down_write(&symmetric_key_subtypes_sem);
++
++	existing = find_subtype_locked(subtype->name);
++	if (existing != NULL) {
++		pr_err("Symmetric key subtype '%s' already registered\n",
++		       subtype->name);
++		ret = -EEXIST;
++		goto out;
++	}
++
++	list_add_tail(&subtype->link, &symmetric_key_subtypes);
++
++	pr_notice("Symmetric key subtype '%s' registered\n", subtype->name);
++	ret = 0;
++
++out:
++	up_write(&symmetric_key_subtypes_sem);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(register_symmetric_key_subtype);
++
++void unregister_symmetric_key_subtype(struct symmetric_key_subtype *subtype)
++{
++	down_write(&symmetric_key_subtypes_sem);
++	list_del(&subtype->link);
++	up_write(&symmetric_key_subtypes_sem);
++
++	pr_notice("Symmetric key subtype '%s' unregistered\n", subtype->name);
++}
++EXPORT_SYMBOL_GPL(unregister_symmetric_key_subtype);
++
++static int __init symmetric_key_init(void)
++{
++	return register_key_type(&key_type_symmetric);
++}
++
++static void __exit symmetric_key_cleanup(void)
++{
++	unregister_key_type(&key_type_symmetric);
++}
++
++module_init(symmetric_key_init);
++module_exit(symmetric_key_cleanup);
++
++MODULE_DESCRIPTION("Symmetric key type");
++MODULE_AUTHOR("sigma star gmbh");
++MODULE_LICENSE("GPL v2");
+-- 
+2.13.6
+

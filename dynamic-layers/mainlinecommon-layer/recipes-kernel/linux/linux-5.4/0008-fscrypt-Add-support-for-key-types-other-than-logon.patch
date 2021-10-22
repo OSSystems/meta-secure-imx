@@ -1,0 +1,151 @@
+From dbbf3ff46b8c404e2bac9a9ee7b6945243b005cd Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Thu, 14 Mar 2019 00:35:40 +0100
+Subject: [PATCH 08/12] fscrypt: Add support for key types other than "logon"
+
+Currently the fscrypt key has to be stored as logon key type. This key is set
+from userspace by deriving it from a user-supplied password. Once set, the key
+payload can only be viewed by the kernel. During key-setup the fscrypt master
+key is available to userspace for a brief period and it has to be taken care
+that the key is properly purged from memory.
+
+This patch adds support for arbitrary key types like encrypted keys or custom key
+types each FS can define on its own. Using encrypted keys yields the adavantage
+that the fscrypt master key is never available to userspace in decrypted form
+and can optionally be protected by a TPM-backed trusted key. These key types
+will also allow for loading the encrypted fscrypt master key (persistently
+stored outside the fscrypt-enabled FS) without requiring a user to supply its
+password.
+
+Each FS can provide the custom key type and an implemntation to extract the
+key payload in the struct fscrypt_operations, otherwise fscrypt will fall
+back to using the logon key type.
+
+Signed-off-by: David Gstir <david@sigma-star.at>
+Signed-off-by: David Oberhollenzer <david.oberhollenzer@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ fs/crypto/keysetup_v1.c | 62 +++++++++++++++++++++++++++++++------------------
+ include/linux/fscrypt.h |  2 ++
+ 2 files changed, 41 insertions(+), 23 deletions(-)
+
+diff --git a/fs/crypto/keysetup_v1.c b/fs/crypto/keysetup_v1.c
+index ad1a36c370c3..edcafc06e8ec 100644
+--- a/fs/crypto/keysetup_v1.c
++++ b/fs/crypto/keysetup_v1.c
+@@ -92,44 +92,58 @@ static struct key *
+ find_and_lock_process_key(const char *prefix,
+ 			  const u8 descriptor[FSCRYPT_KEY_DESCRIPTOR_SIZE],
+ 			  unsigned int min_keysize,
+-			  const struct fscrypt_key **payload_ret)
++			  const struct fscrypt_key **payload_ret,
++			  const struct fscrypt_operations *cop)
+ {
+ 	char *description;
+ 	struct key *key;
+ 	const struct user_key_payload *ukp;
+ 	const struct fscrypt_key *payload;
++	struct key_type *key_type = &key_type_logon;
++
++	if (cop->key_type) {
++		BUG_ON(cop->get_key_payload == NULL);
++		key_type = cop->key_type;
++	}
+ 
+ 	description = kasprintf(GFP_NOFS, "%s%*phN", prefix,
+ 				FSCRYPT_KEY_DESCRIPTOR_SIZE, descriptor);
+ 	if (!description)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	key = request_key(&key_type_logon, description, NULL);
++	key = request_key(key_type, description, NULL);
+ 	kfree(description);
+ 	if (IS_ERR(key))
+ 		return key;
+ 
+ 	down_read(&key->sem);
+-	ukp = user_key_payload_locked(key);
+-
+-	if (!ukp) /* was the key revoked before we acquired its semaphore? */
+-		goto invalid;
+-
+-	payload = (const struct fscrypt_key *)ukp->data;
+-
+-	if (ukp->datalen != sizeof(struct fscrypt_key) ||
+-	    payload->size < 1 || payload->size > FSCRYPT_MAX_KEY_SIZE) {
+-		fscrypt_warn(NULL,
+-			     "key with description '%s' has invalid payload",
+-			     key->description);
+-		goto invalid;
+-	}
+ 
+-	if (payload->size < min_keysize) {
+-		fscrypt_warn(NULL,
+-			     "key with description '%s' is too short (got %u bytes, need %u+ bytes)",
+-			     key->description, payload->size, min_keysize);
+-		goto invalid;
++	if (cop->get_key_payload) {
++		payload = cop->get_key_payload(key);
++		if (IS_ERR(payload))
++			goto invalid;
++	} else {
++		ukp = user_key_payload_locked(key);
++
++		if (!ukp) /* was the key revoked before we acquired its semaphore? */
++			goto invalid;
++
++		payload = (const struct fscrypt_key *)ukp->data;
++
++		if (ukp->datalen != sizeof(struct fscrypt_key) ||
++		    payload->size < 1 || payload->size > FSCRYPT_MAX_KEY_SIZE) {
++			fscrypt_warn(NULL,
++				     "key with description '%s' has invalid payload",
++				     key->description);
++			goto invalid;
++		}
++
++		if (payload->size < min_keysize) {
++			fscrypt_warn(NULL,
++				     "key with description '%s' is too short (got %u bytes, need %u+ bytes)",
++				     key->description, payload->size, min_keysize);
++			goto invalid;
++		}
+ 	}
+ 
+ 	*payload_ret = payload;
+@@ -324,11 +338,13 @@ int fscrypt_setup_v1_file_key_via_subscribed_keyrings(struct fscrypt_info *ci)
+ 
+ 	key = find_and_lock_process_key(FSCRYPT_KEY_DESC_PREFIX,
+ 					ci->ci_policy.v1.master_key_descriptor,
+-					ci->ci_mode->keysize, &payload);
++					ci->ci_mode->keysize, &payload,
++					ci->ci_inode->i_sb->s_cop);
+ 	if (key == ERR_PTR(-ENOKEY) && ci->ci_inode->i_sb->s_cop->key_prefix) {
+ 		key = find_and_lock_process_key(ci->ci_inode->i_sb->s_cop->key_prefix,
+ 						ci->ci_policy.v1.master_key_descriptor,
+-						ci->ci_mode->keysize, &payload);
++						ci->ci_mode->keysize, &payload,
++						ci->ci_inode->i_sb->s_cop);
+ 	}
+ 	if (IS_ERR(key))
+ 		return PTR_ERR(key);
+diff --git a/include/linux/fscrypt.h b/include/linux/fscrypt.h
+index f622f7460ed8..162ba1791556 100644
+--- a/include/linux/fscrypt.h
++++ b/include/linux/fscrypt.h
+@@ -57,10 +57,12 @@ struct fscrypt_name {
+ struct fscrypt_operations {
+ 	unsigned int flags;
+ 	const char *key_prefix;
++	struct key_type *key_type;
+ 	int (*get_context)(struct inode *, void *, size_t);
+ 	int (*set_context)(struct inode *, const void *, size_t, void *);
+ 	bool (*dummy_context)(struct inode *);
+ 	bool (*empty_dir)(struct inode *);
++	struct fscrypt_key * (*get_key_payload)(struct key *);
+ 	unsigned int max_namelen;
+ };
+ 
+-- 
+2.13.6
+

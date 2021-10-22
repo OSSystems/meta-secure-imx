@@ -1,0 +1,272 @@
+From 1f2f784d59a2877c992229cb84a29f3fc79766e3 Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Mon, 7 May 2018 12:44:30 +0200
+Subject: [PATCH 10/12] ubifs: Add mount option support for global keyring
+
+Adds a mount option lookup encryption keys in a ubifs-specific global keyring.
+This keyring is managable by root, but the keys therein are used for every user
+on the system.
+
+This new global keyring is solely used for ubifs encryption.
+
+Signed-off-by: David Oberhollenzer <david.oberhollenzer@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Signed-off-by: David Gstir <david@sigma-star.at>
+
+hs: adapt to 5.4.51 (problem in fs/ubifs/super.c)
+---
+ fs/ubifs/crypto.c | 84 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ fs/ubifs/super.c  | 31 +++++++++++++++++++-
+ fs/ubifs/ubifs.h  |  9 ++++++
+ 3 files changed, 123 insertions(+), 1 deletion(-)
+
+diff --git a/fs/ubifs/crypto.c b/fs/ubifs/crypto.c
+index 22be7aeb96c4..b545add1aa3b 100644
+--- a/fs/ubifs/crypto.c
++++ b/fs/ubifs/crypto.c
+@@ -1,6 +1,12 @@
+ // SPDX-License-Identifier: GPL-2.0
++#include <linux/key-type.h>
++#include <linux/keyctl.h>
++
+ #include "ubifs.h"
+ 
++static struct cred *kr_cred;
++static DEFINE_MUTEX(kr_cred_lock);
++
+ static int ubifs_crypt_get_context(struct inode *inode, void *ctx, size_t len)
+ {
+ 	return ubifs_xattr_get(inode, UBIFS_XATTR_NAME_ENCRYPTION_CONTEXT,
+@@ -76,6 +82,84 @@ int ubifs_decrypt(const struct inode *inode, struct ubifs_data_node *dn,
+ 	return 0;
+ }
+ 
++static struct cred *alloc_keyring_cred(void)
++{
++	struct cred *cred;
++	struct key *keyring;
++	struct key *root_keyring;
++
++	cred = prepare_kernel_cred(NULL);
++	if (!cred)
++		return ERR_PTR(-ENOMEM);
++
++	/* We link the new keyring into root's UID keyring to allow root to
++	 * manage the keys therein via keyctl.
++	 * In future, we might want to have a dedicated ioctl for removing keys
++	 * to also flush the fs cache in case the key is removed. */
++	root_keyring = request_key(&key_type_keyring, "_uid.0", NULL);
++	if (IS_ERR(root_keyring)) {
++		cred = ERR_CAST(root_keyring);
++		goto err_cred;
++	}
++
++	keyring = keyring_alloc(".fscrypt_ubifs", GLOBAL_ROOT_UID,
++				GLOBAL_ROOT_GID, cred,
++				(KEY_POS_ALL & ~KEY_POS_SETATTR) |
++				(KEY_USR_ALL & ~KEY_POS_SETATTR),
++				0, NULL, root_keyring);
++	if (IS_ERR(keyring)) {
++		cred = ERR_CAST(keyring);
++		goto err_rkr;
++	}
++
++	set_bit(KEY_FLAG_ROOT_CAN_CLEAR, &keyring->flags);
++	cred->thread_keyring = keyring;
++	cred->jit_keyring = KEY_REQKEY_DEFL_THREAD_KEYRING;
++
++	pr_info("ubifs: added keyring .fscrypt_ubifs with serial: %d\n",
++		key_serial(keyring));
++
++	return cred;
++
++err_rkr:
++	key_put(root_keyring);
++err_cred:
++	put_cred(cred);
++	return cred;
++}
++
++int ubifs_fscrypt_set_global_keyring(struct fscrypt_operations *cop)
++{
++	int ret = 0;
++	struct cred *cred;
++
++	if (kr_cred == NULL) {
++		mutex_lock(&kr_cred_lock);
++		if (kr_cred == NULL) {
++			cred = alloc_keyring_cred();
++			if (IS_ERR(cred)) {
++				ret = PTR_ERR(cred);
++				mutex_unlock(&kr_cred_lock);
++				pr_err("ubifs: failed to initialize keyring .fscrypt_ubifs: %i\n",
++				       ret);
++				goto out;
++			}
++			kr_cred = cred;
++		}
++		mutex_unlock(&kr_cred_lock);
++	}
++	cop->key_cred = kr_cred;
++
++out:
++	return ret;
++}
++
++void ubifs_fscrypt_exit(void)
++{
++	put_cred(kr_cred);
++	kr_cred = NULL;
++}
++
+ const struct fscrypt_operations ubifs_crypt_operations = {
+ 	.flags			= FS_CFLG_OWN_PAGES,
+ 	.key_prefix		= "ubifs:",
+diff --git a/fs/ubifs/super.c b/fs/ubifs/super.c
+index 7fc2f3f07c16..67e98714f1c5 100644
+--- a/fs/ubifs/super.c
++++ b/fs/ubifs/super.c
+@@ -442,6 +442,9 @@ static int ubifs_show_options(struct seq_file *s, struct dentry *root)
+ 	seq_printf(s, ",assert=%s", ubifs_assert_action_name(c));
+ 	seq_printf(s, ",ubi=%d,vol=%d", c->vi.ubi_num, c->vi.vol_id);
+ 
++	if (c->mount_opts.global_keyring == 1)
++		seq_puts(s, ",global_keyring");
++
+ 	return 0;
+ }
+ 
+@@ -937,6 +940,7 @@ static int check_volume_empty(struct ubifs_info *c)
+  * Opt_no_chk_data_crc: do not check CRCs when reading data nodes
+  * Opt_override_compr: override default compressor
+  * Opt_assert: set ubifs_assert() action
++ * Opt_global_keyring: register new keyring for global encryption key storage
+  * Opt_auth_key: The key name used for authentication
+  * Opt_auth_hash_name: The hash type used for authentication
+  * Opt_err: just end of array marker
+@@ -953,6 +957,7 @@ enum {
+ 	Opt_auth_key,
+ 	Opt_auth_hash_name,
+ 	Opt_ignore,
++	Opt_global_keyring,
+ 	Opt_err,
+ };
+ 
+@@ -969,6 +974,7 @@ static const match_table_t tokens = {
+ 	{Opt_ignore, "ubi=%s"},
+ 	{Opt_ignore, "vol=%s"},
+ 	{Opt_assert, "assert=%s"},
++	{Opt_global_keyring, "global_keyring"},
+ 	{Opt_err, NULL},
+ };
+ 
+@@ -1103,6 +1109,9 @@ static int ubifs_parse_options(struct ubifs_info *c, char *options,
+ 			break;
+ 		case Opt_ignore:
+ 			break;
++		case Opt_global_keyring:
++			c->mount_opts.global_keyring = 1;
++			break;
+ 		default:
+ 		{
+ 			unsigned long flag;
+@@ -1643,6 +1652,10 @@ static void ubifs_umount(struct ubifs_info *c)
+ 	vfree(c->sbuf);
+ 	kfree(c->bottom_up_buf);
+ 	kfree(c->sup_node);
++
++	if (c->mount_opts.global_keyring)
++		kfree(c->vfs_sb->s_cop);
++
+ 	ubifs_debugging_exit(c);
+ }
+ 
+@@ -2132,6 +2145,7 @@ static int ubifs_fill_super(struct super_block *sb, void *data, int silent)
+ 	struct ubifs_info *c = sb->s_fs_info;
+ 	struct inode *root;
+ 	int err;
++	struct fscrypt_operations *cop = NULL;
+ 
+ 	c->vfs_sb = sb;
+ 	/* Re-open the UBI device in read-write mode */
+@@ -2171,7 +2185,18 @@ static int ubifs_fill_super(struct super_block *sb, void *data, int silent)
+ #ifdef CONFIG_UBIFS_FS_XATTR
+ 	sb->s_xattr = ubifs_xattr_handlers;
+ #endif
+-	fscrypt_set_ops(sb, &ubifs_crypt_operations);
++	cop = kmemdup(&ubifs_crypt_operations, sizeof ubifs_crypt_operations,
++		      GFP_NOFS);
++	if (!cop) {
++		err = -ENOMEM;
++		goto out_close;
++	}
++	if (c->mount_opts.global_keyring) {
++		err = ubifs_fscrypt_set_global_keyring(cop);
++		if (err)
++			goto out_free;
++	}
++	fscrypt_set_ops(sb, cop);
+ 
+ 	mutex_lock(&c->umount_mutex);
+ 	err = mount_ubifs(c);
+@@ -2200,6 +2225,8 @@ static int ubifs_fill_super(struct super_block *sb, void *data, int silent)
+ 	ubifs_umount(c);
+ out_unlock:
+ 	mutex_unlock(&c->umount_mutex);
++out_free:
++	kfree(cop);
+ out_close:
+ 	ubi_close_volume(c->ubi);
+ out:
+@@ -2422,6 +2449,8 @@ static void __exit ubifs_exit(void)
+ 	ubifs_compressors_exit();
+ 	unregister_shrinker(&ubifs_shrinker_info);
+ 
++	ubifs_fscrypt_exit();
++
+ 	/*
+ 	 * Make sure all delayed rcu free inodes are flushed before we
+ 	 * destroy cache.
+diff --git a/fs/ubifs/ubifs.h b/fs/ubifs/ubifs.h
+index c55f212dcb75..33702a1148b1 100644
+--- a/fs/ubifs/ubifs.h
++++ b/fs/ubifs/ubifs.h
+@@ -945,6 +945,9 @@ struct ubifs_orphan {
+  *                  specified in @compr_type)
+  * @compr_type: compressor type to override the superblock compressor with
+  *              (%UBIFS_COMPR_NONE, etc)
++ * @global_keyring: register dedicated global keyring for storing ubifs
++ *                  encryption keys. Default is to use each user's session
++ *                  keyring.
+  */
+ struct ubifs_mount_opts {
+ 	unsigned int unmount_mode:2;
+@@ -952,6 +955,7 @@ struct ubifs_mount_opts {
+ 	unsigned int chk_data_crc:2;
+ 	unsigned int override_compr:1;
+ 	unsigned int compr_type:2;
++	unsigned int global_keyring:1;
+ };
+ 
+ /**
+@@ -2085,12 +2089,17 @@ static inline int ubifs_decrypt(const struct inode *inode,
+ 	ubifs_assert(c, 0);
+ 	return -EOPNOTSUPP;
+ }
++static inline void ubifs_fscrypt_exit(void)
++{
++}
+ #else
+ /* crypto.c */
+ int ubifs_encrypt(const struct inode *inode, struct ubifs_data_node *dn,
+ 		  unsigned int in_len, unsigned int *out_len, int block);
+ int ubifs_decrypt(const struct inode *inode, struct ubifs_data_node *dn,
+ 		  unsigned int *out_len, int block);
++int ubifs_fscrypt_set_global_keyring(struct fscrypt_operations *cop);
++void ubifs_fscrypt_exit(void);
+ #endif
+ 
+ extern const struct fscrypt_operations ubifs_crypt_operations;
+-- 
+2.13.6
+

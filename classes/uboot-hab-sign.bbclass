@@ -18,8 +18,8 @@ dec2hex() {
 }
 
 set_bd_path() {
-	if [ -n "${UBOOT_CONFIG}" ]; then
-		bd=${B}/${config}
+	if [ -n "${UBOOT_MACHINE}" ]; then
+		bd=${B}/$(echo ${UBOOT_MACHINE} | xargs)
 	else
 		bd=${B}
 	fi
@@ -72,6 +72,33 @@ get_atf_loadaddr() {
 	export ATF_LOAD_ADDR=$atf_loadaddr
 }
 
+set_crypto_hw() {
+	# It is possible to override the CRYPTO_HW_ACCEL in machine or
+	# distro files
+	if [ -n "${CRYPTO_HW_ACCEL}" ]; then
+	   bbnote "HW crypto accelerator: ${CRYPTO_HW_ACCEL} - already set!"
+	   return
+	fi
+
+	if [ "${CONFIG_MX6ULL}" = "y" ]; then
+	   # imx6ull only has the 'DCP' crypto acceleration HW, but
+	   # according to ERRATA (ERR010449) DCP can be only used by BootROM in
+	   # HAB context only with disabled MMU/CACHE.
+	   # As a result - the software engine 'SW' is used to keep caches/MMU
+	   # enabled for signature checking.
+	   # The other option is to set (fuse) 'BT_MMU_DISABLE'
+	     export CRYPTO_HW_ACCEL="SW"
+	elif [ "${CONFIG_MX6SX}" = "y" ]; then
+	     export CRYPTO_HW_ACCEL="DCP"
+	else
+	     # By default we set the 'CAAM' as most imx6/7 devices
+	     # is equipped with it
+	     export CRYPTO_HW_ACCEL="CAAM"
+	fi
+
+	bbnote "HW crypto accelerator: ${CRYPTO_HW_ACCEL}"
+}
+
 set_variables() {
 	set_bd_path
 	# source u-boot config so we can use the config symbols
@@ -79,6 +106,8 @@ set_variables() {
 	. ${bd}/.config
 
 	get_atf_loadaddr
+
+	set_crypto_hw
 }
 
 
@@ -138,12 +167,18 @@ EOF
 # 
 csf_assemble() {
 	blocks="$(sed -n 's/HAB Blocks:[\t ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)/\1 \2 \3/p' ${2}.log)"
-	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" CAAM
+	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" "${CRYPTO_HW_ACCEL}"
 }
 
 sign_uboot_nofit() {
 	for config in ${UBOOT_MACHINE}; do
-		cd ${B}/${config}
+		echo "MACHINE: ${UBOOT_MACHINE}"
+		echo "CONFIG: ${UBOOT_CONFIG}"
+		if [ -z ${UBOOT_CONFIG} ]; then
+		   cd ${B}/
+		else
+		   cd ${B}/${config}
+		fi
 		if [ -n "${SPL_BINARY}" ]; then
 			csf_assemble ${SPL_BINARY}.csf ${SPL_BINARY}
 			cst --o ${SPL_BINARY}.csf --i ${SPL_BINARY}.csf
@@ -434,7 +469,7 @@ sign_uboot_common() {
 	# detect if we have to sign u-boot.itb image, which contains
 	# all infos we need for signing in image itself.
 	# Yet only IMX8M supported.
-	if [ ${CONFIG_IMX8M} = "y" ];then
+	if [ "${CONFIG_IMX8M}" = "y" ];then
 		if [ ! "${CONFIG_USE_SPL_FIT_GENERATOR}" ];then
 			sign_uboot_binman
 		else

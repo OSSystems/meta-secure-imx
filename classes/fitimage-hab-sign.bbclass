@@ -59,6 +59,7 @@ EOF
 # $4 ... Image Key File
 # $5 ... Blocks Parameter
 # $6 ... Image File
+# $7 ... Crypto engine
 csf_emit_file() {
 	cat << EOF > ${1}
 [Header]
@@ -67,7 +68,7 @@ Hash Algorithm = sha256
 Engine Configuration = 0
 Certificate Format = X509
 Signature Format = CMS
-Engine = CAAM
+Engine = ${7}
 
 [Install SRK]
 File = "${2}"
@@ -88,7 +89,7 @@ Verification index = 2
 Blocks = ${5} "${6}"
 
 [Unlock]
-Engine = CAAM
+Engine = ${7}
 Features = RNG
 EOF
 }
@@ -108,7 +109,17 @@ csf_assemble() {
 	IMG_SIGN_AREA_SIZE=$(printf "0x%x" `wc -c < ${2}`)
 	blocks="${RAM_AUTH_AREA_START}   ${IMG_SIGN_AREA_START}   ${IMG_SIGN_AREA_SIZE}"
 
-	csf_emit_file ${1} ${SRKTAB} ${CSFK} ${SIGN_CERT} "${blocks}" ${2}
+	csf_emit_file ${1} ${SRKTAB} ${CSFK} ${SIGN_CERT} "${blocks}" ${2} "${CRYPTO_HW_ACCEL}"
+}
+
+prepare_hab_image() {
+	attach_ivt ${1}
+	csf_assemble command_sequence_${1}-ivt.csf ${1}-ivt
+	echo "cst --o ${1}-ivt.csf --i command_sequence_${1}-ivt.csf"
+	cst --o ${1}-ivt.csf --i command_sequence_${1}-ivt.csf
+	cat ${1}-ivt ${1}-ivt.csf > ${1}-ivt.tmp
+	cp ${1}-ivt.tmp ${1}-ivt.${KERNEL_SIGN_SUFFIX}
+	rm -f ${1}-ivt.tmp ${1}-ivt.csf ${1}-ivt
 }
 
 kernel_do_deploy_append() {
@@ -118,13 +129,7 @@ kernel_do_deploy_append() {
 		if [ -n "${INITRAMFS_IMAGE}" ] && [ -f "fitImage-${INITRAMFS_IMAGE}" ]; then
 			FITIMAGE="fitImage-${INITRAMFS_IMAGE}"
 			FITLOADADDR=`mkimage -l ${FITIMAGE} | awk 'NR<14 {print $0}' | grep "Load Address:" | cut -d':' -f 2`
-			attach_ivt ${FITIMAGE}
-			csf_assemble command_sequence_${FITIMAGE}-ivt.csf ${FITIMAGE}-ivt
-			echo "cst --o ${FITIMAGE}-ivt.csf --i command_sequence_${FITIMAGE}-ivt.csf"
-			cst --o ${FITIMAGE}-ivt.csf --i command_sequence_${FITIMAGE}-ivt.csf
-			cat ${FITIMAGE}-ivt ${FITIMAGE}-ivt.csf > ${FITIMAGE}-ivt.tmp
-			cp ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX}
-			rm -f ${FITIMAGE}-ivt.tmp ${FITIMAGE}-ivt.csf ${FITIMAGE}-ivt
+			prepare_hab_image ${FITIMAGE}
 			install ${FITIMAGE}-ivt.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX}
 			ln -sf fitImage-${INITRAMFS_IMAGE}-${MACHINE}.bin.${KERNEL_SIGN_SUFFIX} ${DEPLOYDIR}/${FITIMAGE}.${KERNEL_SIGN_SUFFIX}
 		else

@@ -1,0 +1,25 @@
+From 74eea68287bed0344cb64236f4fe2004aa41c10a Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Wed, 3 Apr 2019 22:31:02 +0200
+Subject: [PATCH 01/12] arm: dts: Enable mxs-dcp by default
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ arch/arm/boot/dts/imx6ull.dtsi | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm/boot/dts/imx6ull.dtsi b/arch/arm/boot/dts/imx6ull.dtsi
+index b7e67d121322..ad4210aefc83 100644
+--- a/arch/arm/boot/dts/imx6ull.dtsi
++++ b/arch/arm/boot/dts/imx6ull.dtsi
+@@ -66,6 +66,7 @@
+ 					     <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
+ 				clocks = <&clks IMX6ULL_CLK_DCP_CLK>;
+ 				clock-names = "dcp";
++				status = "okay";
+ 			};
+ 
+ 			iomuxc_snvs: iomuxc-snvs@2290000 {
+-- 
+2.13.6
+

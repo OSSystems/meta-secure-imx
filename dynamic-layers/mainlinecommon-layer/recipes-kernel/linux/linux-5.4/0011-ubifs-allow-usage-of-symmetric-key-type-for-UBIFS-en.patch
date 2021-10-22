@@ -1,0 +1,90 @@
+From 6862d99fdad5ad52894591c859b5a4bc38582914 Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Mon, 7 May 2018 13:41:11 +0200
+Subject: [PATCH 11/12] ubifs: allow usage of symmetric key type for UBIFS
+ encryption
+
+Using the global_keyring mount option UBIFS creates a dedicated key ring
+which is linked into root's user keyring. With global_keyring enabled,
+UBIFS encryption will search this new keyring for encryption keys of
+type symmetric.
+
+Signed-off-by: David Oberhollenzer <david.oberhollenzer@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Signed-off-by: David Gstir <david@sigma-star.at>
+---
+ fs/ubifs/Kconfig  |  9 +++++++++
+ fs/ubifs/crypto.c | 25 +++++++++++++++++++++++++
+ 2 files changed, 34 insertions(+)
+
+diff --git a/fs/ubifs/Kconfig b/fs/ubifs/Kconfig
+index 69932bcfa920..05c23c23208d 100644
+--- a/fs/ubifs/Kconfig
++++ b/fs/ubifs/Kconfig
+@@ -72,6 +72,15 @@ config UBIFS_FS_XATTR
+ 
+ 	  If unsure, say Y.
+ 
++config UBIFS_FS_ENCRYPTION_SYM_KEYS
++	bool "Use symmetric keys for UBIFS encryption"
++	depends on UBIFS_FS && BLOCK && FS_ENCRYPTION && SYMMETRIC_KEYS
++	default n
++	help
++	  Use symmetric keys for storing UBIFS encryption keys. This enables hardware-bound
++	  keys which can safely be stored on a persitent medium and are encrypted and
++	  authenticated by a hardware engine like CAAM.
++
+ config UBIFS_FS_SECURITY
+ 	bool "UBIFS Security Labels"
+ 	depends on UBIFS_FS_XATTR
+diff --git a/fs/ubifs/crypto.c b/fs/ubifs/crypto.c
+index b545add1aa3b..8f889214cd4c 100644
+--- a/fs/ubifs/crypto.c
++++ b/fs/ubifs/crypto.c
+@@ -2,6 +2,10 @@
+ #include <linux/key-type.h>
+ #include <linux/keyctl.h>
+ 
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++#include <keys/symmetric-subtype.h>
++#endif
++
+ #include "ubifs.h"
+ 
+ static struct cred *kr_cred;
+@@ -160,6 +164,23 @@ void ubifs_fscrypt_exit(void)
+ 	kr_cred = NULL;
+ }
+ 
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++static struct fscrypt_key *ubifs_get_key_payload(struct key *key)
++{
++	int ret;
++	const u8 *payload;
++	unsigned int payload_len;
++
++	ret = symmetric_key_keyref(key, &payload, &payload_len);
++	if (ret) {
++		pr_err("ubifs: failed to get encryption key payload: %i\n", ret);
++		return ERR_PTR(ret);
++	}
++
++	return (struct fscrypt_key *)payload;
++}
++#endif /* CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS */
++
+ const struct fscrypt_operations ubifs_crypt_operations = {
+ 	.flags			= FS_CFLG_OWN_PAGES,
+ 	.key_prefix		= "ubifs:",
+@@ -167,4 +188,8 @@ const struct fscrypt_operations ubifs_crypt_operations = {
+ 	.set_context		= ubifs_crypt_set_context,
+ 	.empty_dir		= ubifs_crypt_empty_dir,
+ 	.max_namelen		= UBIFS_MAX_NLEN,
++#if IS_ENABLED(CONFIG_UBIFS_FS_ENCRYPTION_SYM_KEYS)
++	.key_type		= &key_type_symmetric,
++	.get_key_payload	= ubifs_get_key_payload,
++#endif
+ };
+-- 
+2.13.6
+

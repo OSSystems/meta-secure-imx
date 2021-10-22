@@ -1,0 +1,121 @@
+From 59978ee5ed79165584583ae4697728008c0fb1a3 Mon Sep 17 00:00:00 2001
+From: David Gstir <david@sigma-star.at>
+Date: Fri, 23 Nov 2018 10:11:36 +0100
+Subject: [PATCH 04/12] KEYS: add symmetric key test module
+
+Signed-off-by: David Gstir <david@sigma-star.at>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+---
+ security/keys/symmetric_keys/Kconfig          |  3 ++
+ security/keys/symmetric_keys/Makefile         |  2 +
+ security/keys/symmetric_keys/sym_memory_key.c |  2 +-
+ security/keys/symmetric_keys/test.c           | 61 +++++++++++++++++++++++++++
+ 4 files changed, 67 insertions(+), 1 deletion(-)
+ create mode 100644 security/keys/symmetric_keys/test.c
+
+diff --git a/security/keys/symmetric_keys/Kconfig b/security/keys/symmetric_keys/Kconfig
+index 1a934ac2af22..41e3e5d654bf 100644
+--- a/security/keys/symmetric_keys/Kconfig
++++ b/security/keys/symmetric_keys/Kconfig
+@@ -18,5 +18,8 @@ config SYMMETRIC_KEYS_MEMORY_SUBTYPE
+ 	  key type except it is usable for encrypt and decrypt operations
+ 	  through the crypto API.
+ 
++config SYMMETRIC_KEYS_TEST
++	tristate "Symmetric test module"
++	depends on m
+ 
+ endif # SYMMETRIC_KEYS
+diff --git a/security/keys/symmetric_keys/Makefile b/security/keys/symmetric_keys/Makefile
+index bffcb9ed8e8c..c48c7f8cec92 100644
+--- a/security/keys/symmetric_keys/Makefile
++++ b/security/keys/symmetric_keys/Makefile
+@@ -7,3 +7,5 @@ obj-$(CONFIG_SYMMETRIC_KEYS) += symmetric_type.o
+ 
+ obj-$(CONFIG_SYMMETRIC_KEYS_MEMORY_SUBTYPE) += sym_memory_key.o
+ 
++obj-$(CONFIG_SYMMETRIC_KEYS_TEST) += test.o
++
+diff --git a/security/keys/symmetric_keys/sym_memory_key.c b/security/keys/symmetric_keys/sym_memory_key.c
+index 4662caa2db0c..7c4996859827 100644
+--- a/security/keys/symmetric_keys/sym_memory_key.c
++++ b/security/keys/symmetric_keys/sym_memory_key.c
+@@ -24,7 +24,7 @@ struct sym_memory_key_payload {
+ 
+ static void sym_memory_destroy(void *payload_crypto)
+ {
+-	struct sym_memory_ley_payload *payload = payload_crypto;
++	struct sym_memory_key_payload *payload = payload_crypto;
+ 
+ 	if (!payload)
+ 		return;
+diff --git a/security/keys/symmetric_keys/test.c b/security/keys/symmetric_keys/test.c
+new file mode 100644
+index 000000000000..80ee1b0fa6a5
+--- /dev/null
++++ b/security/keys/symmetric_keys/test.c
+@@ -0,0 +1,61 @@
++#include <keys/symmetric-subtype.h>
++#include <linux/module.h>
++
++static char *key_id = NULL;
++
++static int __init sym_test_init(void)
++{
++	int ret;
++	struct key *key;
++	struct symmetric_key_subtype *subtype;
++	const u8 *keyref;
++	unsigned int keyref_len;
++
++	pr_info("Looking for key '%s'...\n", key_id);
++
++	key = request_key(&key_type_symmetric, key_id, NULL);
++	if (IS_ERR(key))
++		return PTR_ERR(key);
++
++	subtype = symmetric_key_subtype(key);
++	if (!subtype) {
++		pr_err("No subtype found!");
++		ret = -EINVAL;
++		goto out;
++	}
++
++	pr_info("Got symmetric key with subtype '%s'\n", subtype->name);
++
++	if (strcmp(subtype->name, "sym_memory") != 0) {
++		pr_err("Subtype is not sym_memory (is '%s')\n", subtype->name);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	ret = symmetric_key_keyref(key, &keyref, &keyref_len);
++	if (ret) {
++		pr_err("Failed to get keyref for '%s'\n", subtype->name);
++		goto out;
++	}
++
++	print_hex_dump(KERN_ERR, "raw keyref:", DUMP_PREFIX_ADDRESS, 16, 1,
++		       keyref, keyref_len, false);
++
++	/* prevent keeping the module, so that we can load it multiple times */
++	ret = -EAGAIN;
++out:
++	key_put(key);
++	return ret;
++}
++
++static void __exit sym_test_exit(void)
++{
++	// NOP
++}
++
++module_init(sym_test_init);
++module_exit(sym_test_exit);
++
++module_param(key_id, charp, 0);
++
++MODULE_LICENSE("GPL v2");
+-- 
+2.13.6
+
