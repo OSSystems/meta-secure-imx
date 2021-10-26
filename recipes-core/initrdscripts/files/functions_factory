@@ -58,8 +58,8 @@ program_mac_fuses() {
     hexdump -e '"0x%04x\n"' /tmp/mac0
     hexdump -e '"0x%04x\n"' /tmp/mac1
 
-    imx_fuse_write 34 /tmp/mac0
-    imx_fuse_write 35 /tmp/mac1
+    imx_fuse_write ${IMX_FUSE_MAC0_IDX} /tmp/mac0
+    imx_fuse_write ${IMX_FUSE_MAC1_IDX} /tmp/mac1
 
     rm /tmp/mac*
 }
@@ -75,7 +75,7 @@ SRK_BIN="SRK_1_2_3_4_fuse.bin"
 write_key_signature() {
     echo "Program SRK key to FUSEs"
     echo "Current SRK bin data:"
-    imx_fuse_read 24 8
+    imx_fuse_read ${IMX_FUSE_SRK_IDX} ${IMX_FUSE_SRK_SIZE}
 
     factory_get_file ${SRK_BIN}
     [ -f /tmp/${SRK_BIN} ] || { echo "No ${SRK_BIN}!"; return 1; }
@@ -83,7 +83,7 @@ write_key_signature() {
     echo "To FUSE SRK bin data:"
     hexdump -e '"0x%04x\n"' /tmp/${SRK_BIN}
 
-    imx_fuse_write 24 /tmp/${SRK_BIN}
+    imx_fuse_write ${IMX_FUSE_SRK_IDX} /tmp/${SRK_BIN}
 }
 
 enable_secure_boot() {
