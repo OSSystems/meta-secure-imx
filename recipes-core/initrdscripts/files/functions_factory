@@ -27,12 +27,12 @@ load_crypt_key() {
 # MAC_ADDR_FILE shall be set in the board specific initramfs
 # file.
 program_mac_fuses() {
-
     factory_get_file ${MAC_ADDR_FILE} || return 1
 
     [ -f /tmp/${MAC_ADDR_FILE} ] || { echo "No ${MAC_ADDR_FILE}!"; return 1; }
 
-    mac=$(cat /tmp/${MAC_ADDR_FILE})
+    mac_num=$(cat /tmp/${MAC_ADDR_FILE} | wc -l)
+    mac=$(head -1 /tmp/${MAC_ADDR_FILE})
     echo "Program MAC: ${mac}"
 
     m=${mac#*":"}
@@ -53,13 +53,41 @@ program_mac_fuses() {
     mac0=${m}
 
     echo -en "\x${mac0}\x${mac1}\x${mac2}\x${mac3}" > /tmp/mac0
-    echo -en "\x${mac4}\x${mac5}\x0\x0" > /tmp/mac1
+    echo -en "\x${mac4}\x${mac5}" > /tmp/mac1
 
-    hexdump -e '"0x%04x\n"' /tmp/mac0
-    hexdump -e '"0x%04x\n"' /tmp/mac1
+    # Process second MAC address if present
+    if [ "${mac_num}" == "2" ]; then
+	mac=$(head -2 /tmp/${MAC_ADDR_FILE} | tail -1 )
+	echo "Program MAC2: ${mac}"
+
+	m=${mac#*":"}
+	mac5=${mac%%":"*}
+
+	mac4=${m%%":"*}
+	m=${m#*":"}
+
+	mac3=${m%%":"*}
+	m=${m#*":"}
+
+	mac2=${m%%":"*}
+	m=${m#*":"}
+
+	mac1=${m%%":"*}
+	m=${m#*":"}
+
+	mac0=${m}
+
+	echo -en "\x${mac0}\x${mac1}" >> /tmp/mac1
+	echo -en "\x${mac2}\x${mac3}\x${mac4}\x${mac5}" > /tmp/mac2
+    else
+	echo -en "\x0\x0" >> /tmp/mac1
+    fi
 
     imx_fuse_write ${IMX_FUSE_MAC0_IDX} /tmp/mac0
     imx_fuse_write ${IMX_FUSE_MAC1_IDX} /tmp/mac1
+
+    # Fuse MAC2 if present
+    [ "${mac_num}" == "2" ] && imx_fuse_write ${IMX_FUSE_MAC2_IDX} /tmp/mac2
 
     rm /tmp/mac*
 }
