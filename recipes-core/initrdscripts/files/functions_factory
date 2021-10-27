@@ -116,6 +116,11 @@ write_key_signature() {
 
 enable_secure_boot() {
     echo "ENABLE SECURE BOOT (NON REVISIBLE)!!!"
+
+    echo -en ${IMX_FUSE_SEC_CONFIG_VAL} > /tmp/sec_config
+    imx_fuse_write ${IMX_FUSE_SEC_CONFIG_IDX} /tmp/sec_config
+
+    rm /tmp/sec_config
 }
 
 # load key blob into $keyblobpath
