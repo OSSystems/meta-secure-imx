@@ -157,7 +157,7 @@ create_key_blob() {
 
     check_key ${keyoffset}
     if [ $key_found -eq 1 ];then
-	debug "found rootfs key, do not create key"
+	debug "Found rootfs key, do not create key"
 	return
     fi
 
