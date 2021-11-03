@@ -92,19 +92,6 @@ program_mac_fuses() {
     rm /tmp/mac*
 }
 
-set_ro_on_mmcboot() {
-     dev="${1}"
-     bootpart="${2}"
-     mmcboot="mmcblk${dev}boot${bootpart}"
-
-     [ -b /dev/${mmcboot} ] || { echo "No ${mmcboot}!"; return 1; }
-
-     echo "Setting ${mmcboot} to RO !"
-     # Please use the -p switch to set RO for boot area permanently,
-     # otherwise the RO is only till next boot.
-     mmc writeprotect boot set /dev/mmcblk${dev} ${bootpart}
-}
-
 # Here the SRK_1_2_3_4_fuse.bin file needs to be written
 SRK_BIN="SRK_1_2_3_4_fuse.bin"
 write_key_signature() {
@@ -215,7 +202,6 @@ factory_setup() {
     write_key_signature || { echo "FAIL!"; return 1; }
     create_key_blob
     board_factory_setup || { echo "FAIL!"; return 1; }
-    set_ro_on_mmcboot ${protemmcdev} ${protemmcpart} || { echo "FAIL!"; return 1; }
     enable_secure_boot
     echo "OK"
 }
