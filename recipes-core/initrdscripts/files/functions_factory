@@ -212,8 +212,8 @@ factory_setup() {
     echo -n "In-factory setup: "
     load_crypt_key || { echo "FAIL!"; return 1; }
     program_mac_fuses || { echo "FAIL!"; return 1; }
-    create_key_blob
     write_key_signature || { echo "FAIL!"; return 1; }
+    create_key_blob
     set_ro_on_mmcboot ${protemmcdev} ${protemmcpart} || { echo "FAIL!"; return 1; }
     enable_secure_boot
     echo "OK"
