@@ -332,3 +332,209 @@ keys.
 Add this meta layer to your build and you use the default keys from there.
 
 Of course, do not use them in your product!
+
+# Example usage of `meta-secure-imx` layer with imx6ull based BSP
+
+## Introduction
+This section of the documentation describes the integration of this meta layer
+with BSP meta layer.
+
+It is important to also use the `meta-security` and `meta-mainline-common` from
+[1] to get the newest stable kernels.
+
+## Available initramfs images:
+1. `factory-image-fit` - it is responsible for the factory setup of the iMX
+based board:
+  - Fuse MAC address from tftp accessible `imx6ull-<board>-mac.txt`
+  - Fuse SRK from tftp accessible `SRK_1_2_3_4_fuse.bin`
+  - Create rootfs encryption blob - it needs to download (temporarily only)
+	the `imx6ull-<board>-rootfs-enc-key.txt` with encryption key (it is the same
+	as the one passed to `ENC_KEY_RAW` and will **NOT** be stored on the board)
+  - Enable secure booting (a.k.a locking the board) -> PERMANENT
+  - Sets the eMMC boot areas as RO (read only) -> PERMANENT.
+
+It needs to be build separately with: `bitbake factory-image-fit`
+
+2. `crypt-image-initramfs` is the fitImage with initramfs (and kernel), which:
+  - Will read the keyblob from persistent memory
+  - Setup dm-crypt to decrypt the rootfs
+  - Switch root to boot from it
+
+It is build when `virtual/kernel` is build (the
+`INITRAMFS_IMAGE = "crypt-image-initramfs"` is added to machine.conf file)
+
+## Enhancements to `meta-<board>-bsp` layer
+
+1. `recipes-core/images/factory-image-fit.bbappend` - set correct load address
+for the imx6ull SoC
+
+```
+do_assemble_fit_prepend() {
+	sed -i "s|ITS_KERNEL_LOAD_ADDR|0x87800000|g" ${B}/rescue.its.in
+	sed -i "s|ITS_KERNEL_ENTRY_ADDR|0x87800000|g" ${B}/rescue.its.in
+}
+```
+
+2. `recipes-core/initrdscripts/initramfs-init_%.bbappend`
+```
+FILESEXTRAPATHS_prepend := "${THISDIR}/files:"
+
+SRC_URI += " \
+  file://initramfs \
+"
+
+INITFUNCTIONS_INSTALL_DIR ?= "${sysconfdir}/default"
+
+do_install_append () {
+	install -d ${D}${sysconfdir}
+	install -d ${D}${INITFUNCTIONS_INSTALL_DIR}
+	install -m 0755 ${WORKDIR}/initramfs ${D}${INITFUNCTIONS_INSTALL_DIR}
+}
+
+FILES_${PN} += " \
+  ${INITFUNCTIONS_INSTALL_DIR}/initramfs \
+"
+```
+
+3. `recipes-core/initrdscripts/files/initramfs`  - set board specific bash
+functions and variables
+
+```
+# Board specific defines
+#
+imx_soc="imx6ull"
+keystoredev="mmc"
+keystoremmcdev="1"
+keystoremmcpart="boot0"
+board="<board>"
+
+# dcp blob has 138 bytes
+keysize="138"
+
+# eMMC boot0 part offset (in LBAs)
+# Provide 512B to store the blob
+# 4MiB - 512B (and converted to LBA)
+keyoffset="8191"
+
+keyblobpath="/tmp/dmcrypt.blob"
+
+# We use rootfs encryption with signed key
+VERIFYROOTFS="no"
+
+CRYPT_KEY_FILE="imx6ull-<board>-rootfs-enc-key.txt"
+MAC_ADDR_FILE="imx6ull-<board>-mac.txt"
+
+# Fuse nvmem offsets for imx6ull
+IMX_FUSE_SEC_CONFIG_IDX="6"
+IMX_FUSE_SEC_CONFIG_VAL="\x2\x0\x0\x0"
+
+IMX_FUSE_SRK_IDX="24"
+IMX_FUSE_SRK_SIZE="8"
+
+IMX_FUSE_MAC0_IDX="34"
+IMX_FUSE_MAC1_IDX="35"
+
+# From u-boot envs
+get_root_dev_path () {
+	mmc_part=$(fw_printenv -n mmcdev)
+	root_part=$(fw_printenv -n rootpart)
+
+	ROOT_DEV="/dev/mmcblk${mmc_part}p${root_part}"
+}
+
+load_key_blob () {
+	tfile="/tmp/keytmp"
+	dd if=/dev/mmcblk${keystoremmcdev}${keystoremmcpart} of=${tfile} bs=512 skip=${keyoffset} count=1 2>/dev/null
+	dd if=${tfile} of=${keyblobpath} bs=1 count=${keysize} 2>/dev/null
+
+	rm ${tfile}
+}
+
+imx_fuse_read () {
+	idx=${1}
+	count=${2}
+
+	[ -z ${idx} ] && return 1
+	[ -z ${count} ] && return 1
+
+	ocotp_patch=$(find /sys/bus/ -name "imx-ocotp0")
+	[ -z ${ocotp_patch} ] && { echo "No FUSE support!"; return 1; }
+	ocotp_file=${ocotp_patch}/nvmem
+
+	dd if=${ocotp_file} bs=4 count=${count} skip=${idx} 2>/dev/null | hexdump -e '"0x%04x\n"'
+}
+
+imx_fuse_write () {
+	idx=${1}
+	file=${2}
+
+	[ -z ${idx} ] && return 1
+	[ -z ${file} ] && return 1
+
+	ocotp_patch=$(find /sys/bus/ -name "imx-ocotp0")
+	[ -z ${ocotp_patch} ] && { echo "No FUSE support!"; return 1; }
+	ocotp_file=${ocotp_patch}/nvmem
+
+	# Below is a test code to check if we are going to correctly write fuses
+	#hexdump ${ocotp_file}
+	#dd if=/dev/zero of=/tmp/foo bs=64 count=1 2>/dev/null
+	#dd if=${file} of=/tmp/foo bs=4 seek=${idx} 2>/dev/null
+	#hexdump /tmp/foo
+
+	# Real code to program fuses
+	dd if=${file} of=${ocotp_file} bs=4 seek=${idx} 2>/dev/null
+}
+
+# imx6ull FUSE information
+# static const char *imx6ull_otp_desc[][8] = {
+# BANK8(LOCK, CFG0, CFG1, CFG2, CFG3, CFG4, CFG5, CFG6),
+# BANK8(MEM0, MEM1, MEM2, MEM3, MEM4, ANA0, ANA1, ANA2),
+# BANK8(OTPMK0, OTPMK1, OTPMK2, OTPMK3, OTPMK4, OTPMK5, OTPMK6, OTPMK7),
+# BANK8(SRK0, SRK1, SRK2, SRK3, SRK4, SRK5, SRK6, SRK7),
+# BANK8(SJC_RESP0, SJC_RESP1, MAC0, MAC1, MAC2, CRC, GP1, GP2),
+# BANK8(SW_GP0, SW_GP1, SW_GP2, SW_GP3, SW_GP4,  MISC_CONF,  FIELD_RETURN, SRK_REVOKE),
+# BANK8(ROM_PATCH0, ROM_PATCH1, ROM_PATCH2, ROM_PATCH3, ROM_PATCH4, ROM_PATCH5, ROM_PATCH6, ROM_PATCH7),
+# BANK8(GP30, GP31, GP32, GP33, GP40, GP41, GP42, GP43),
+#};
+
+factory_get_file () {
+	file="${1}"
+	[ -z ${file} ] && { echo "File to get not provided!"; return 1; }
+
+	tftp -g -r ${file} -l /tmp/${file} 192.168.0.1
+}
+
+set_ro_on_mmcboot() {
+     dev="${1}"
+     bootpart="${2}"
+     mmcboot="mmcblk${dev}boot${bootpart}"
+
+     [ -b /dev/${mmcboot} ] || { echo "No ${mmcboot}!"; return 1; }
+
+     echo "Setting ${mmcboot} to RO !"
+     # Please use the -p switch to set RO for boot area permanently,
+     # otherwise the RO is only till next boot.
+     mmc writeprotect boot set /dev/mmcblk${dev} ${bootpart}
+}
+
+# Board specific quirks:
+#
+board_factory_setup () {
+	echo "Set booting from /dev/mmcblk1boot0"
+	mmc bootpart enable 1 0 /dev/mmcblk1
+
+	set_ro_on_mmcboot 1 0 || { echo "FAIL!"; return 1; }
+	set_ro_on_mmcboot 1 1 || { echo "FAIL!"; return 1; }
+}
+
+```
+
+The `iMX7/8` will have different offsets for eFUSE registers, but
+the overall idea for read/write functions can be reused.
+
+
+Links:
+------
+
+[1] - https://source.denx.de/denx/meta-mainline-common
+
