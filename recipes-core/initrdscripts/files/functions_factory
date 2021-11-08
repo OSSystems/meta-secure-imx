@@ -27,12 +27,12 @@ load_crypt_key() {
 # MAC_ADDR_FILE shall be set in the board specific initramfs
 # file.
 program_mac_fuses() {
-
     factory_get_file ${MAC_ADDR_FILE} || return 1
 
     [ -f /tmp/${MAC_ADDR_FILE} ] || { echo "No ${MAC_ADDR_FILE}!"; return 1; }
 
-    mac=$(cat /tmp/${MAC_ADDR_FILE})
+    mac_num=$(cat /tmp/${MAC_ADDR_FILE} | wc -l)
+    mac=$(head -1 /tmp/${MAC_ADDR_FILE})
     echo "Program MAC: ${mac}"
 
     m=${mac#*":"}
@@ -53,21 +53,43 @@ program_mac_fuses() {
     mac0=${m}
 
     echo -en "\x${mac0}\x${mac1}\x${mac2}\x${mac3}" > /tmp/mac0
-    echo -en "\x${mac4}\x${mac5}\x0\x0" > /tmp/mac1
+    echo -en "\x${mac4}\x${mac5}" > /tmp/mac1
 
-    hexdump -e '"0x%04x\n"' /tmp/mac0
-    hexdump -e '"0x%04x\n"' /tmp/mac1
+    # Process second MAC address if present
+    if [ "${mac_num}" == "2" ]; then
+	mac=$(head -2 /tmp/${MAC_ADDR_FILE} | tail -1 )
+	echo "Program MAC2: ${mac}"
 
-    imx_fuse_write 34 /tmp/mac0
-    imx_fuse_write 35 /tmp/mac1
+	m=${mac#*":"}
+	mac5=${mac%%":"*}
+
+	mac4=${m%%":"*}
+	m=${m#*":"}
+
+	mac3=${m%%":"*}
+	m=${m#*":"}
+
+	mac2=${m%%":"*}
+	m=${m#*":"}
+
+	mac1=${m%%":"*}
+	m=${m#*":"}
+
+	mac0=${m}
+
+	echo -en "\x${mac0}\x${mac1}" >> /tmp/mac1
+	echo -en "\x${mac2}\x${mac3}\x${mac4}\x${mac5}" > /tmp/mac2
+    else
+	echo -en "\x0\x0" >> /tmp/mac1
+    fi
+
+    imx_fuse_write ${IMX_FUSE_MAC0_IDX} /tmp/mac0
+    imx_fuse_write ${IMX_FUSE_MAC1_IDX} /tmp/mac1
+
+    # Fuse MAC2 if present
+    [ "${mac_num}" == "2" ] && imx_fuse_write ${IMX_FUSE_MAC2_IDX} /tmp/mac2
 
     rm /tmp/mac*
-}
-
-set_ro_on_mmcboot() {
-     if [ ${1} == "0" ]; then
-	 echo "Setting mmcblk1boot${1} to RO"
-     fi
 }
 
 # Here the SRK_1_2_3_4_fuse.bin file needs to be written
@@ -75,7 +97,7 @@ SRK_BIN="SRK_1_2_3_4_fuse.bin"
 write_key_signature() {
     echo "Program SRK key to FUSEs"
     echo "Current SRK bin data:"
-    imx_fuse_read 24 8
+    imx_fuse_read ${IMX_FUSE_SRK_IDX} ${IMX_FUSE_SRK_SIZE}
 
     factory_get_file ${SRK_BIN}
     [ -f /tmp/${SRK_BIN} ] || { echo "No ${SRK_BIN}!"; return 1; }
@@ -83,11 +105,16 @@ write_key_signature() {
     echo "To FUSE SRK bin data:"
     hexdump -e '"0x%04x\n"' /tmp/${SRK_BIN}
 
-    imx_fuse_write 24 /tmp/${SRK_BIN}
+    imx_fuse_write ${IMX_FUSE_SRK_IDX} /tmp/${SRK_BIN}
 }
 
 enable_secure_boot() {
     echo "ENABLE SECURE BOOT (NON REVISIBLE)!!!"
+
+    echo -en ${IMX_FUSE_SEC_CONFIG_VAL} > /tmp/sec_config
+    imx_fuse_write ${IMX_FUSE_SEC_CONFIG_IDX} /tmp/sec_config
+
+    rm /tmp/sec_config
 }
 
 # load key blob into $keyblobpath
@@ -124,7 +151,7 @@ create_key_blob() {
 
     check_key ${keyoffset}
     if [ $key_found -eq 1 ];then
-	debug "found rootfs key, do not create key"
+	debug "Found rootfs key, do not create key"
 	return
     fi
 
@@ -172,9 +199,9 @@ factory_setup() {
     echo -n "In-factory setup: "
     load_crypt_key || { echo "FAIL!"; return 1; }
     program_mac_fuses || { echo "FAIL!"; return 1; }
-    create_key_blob
     write_key_signature || { echo "FAIL!"; return 1; }
-    set_ro_on_mmcboot 0
+    create_key_blob
+    board_factory_setup || { echo "FAIL!"; return 1; }
     enable_secure_boot
     echo "OK"
 }

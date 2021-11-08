@@ -26,6 +26,8 @@ B = "${S}"
 
 ITB_FNAME = "${PN}.itb"
 
+inherit fitimage-hab-sign
+
 # create fit Image
 do_assemble_fit() {
 	echo "STAGING_KERNEL_DIR" ${STAGING_KERNEL_DIR}
@@ -59,6 +61,9 @@ do_assemble_fit() {
 
 	install -d ${DEPLOY_DIR_IMAGE}
 	install -m 644 ${ITB_FNAME} ${DEPLOY_DIR_IMAGE}/${ITB_FNAME}
+
+	prepare_hab_image ${ITB_FNAME}
+	install ${ITB_FNAME}-ivt.${KERNEL_SIGN_SUFFIX} ${DEPLOY_DIR_IMAGE}/${ITB_FNAME}.${KERNEL_SIGN_SUFFIX}
 }
 addtask do_assemble_fit before do_install after do_compile
 

@@ -54,7 +54,7 @@ detect_imx_crypto_engine() {
 }
 
 debug_reboot() {
-    if [ "$DEBUGSHELL" != "no" ]; then
+    if [ "${DEBUGSHELL}" == "yes" ]; then
 	echo "enter debugshell"
 	/bin/sh
     else
