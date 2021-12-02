@@ -1,0 +1,37 @@
+From ba0bb206ebdc9d8c09ca73cf1ca27055766f34f2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Uwe=20Kleine-K=C3=B6nig?= <u.kleine-koenig@pengutronix.de>
+Date: Wed, 5 Feb 2020 15:00:02 +0100
+Subject: [PATCH 2/3] hwrng: imx-rngc - improve dependencies
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The imx-rngc driver binds to devices that are compatible to
+"fsl,imx25-rngb". Grepping through the device tree sources suggests this
+only exists on i.MX25. So restrict dependencies to configs that have
+this SoC enabled, but allow compile testing. For the latter additional
+dependencies for clk and readl/writel are necessary.
+
+Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+---
+ drivers/char/hw_random/Kconfig | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/char/hw_random/Kconfig b/drivers/char/hw_random/Kconfig
+index 59f25286befe..7b4b100f1c99 100644
+--- a/drivers/char/hw_random/Kconfig
++++ b/drivers/char/hw_random/Kconfig
+@@ -244,7 +244,8 @@ config HW_RANDOM_MXC_RNGA
+ 
+ config HW_RANDOM_IMX_RNGC
+ 	tristate "Freescale i.MX RNGC Random Number Generator"
+-	depends on ARCH_MXC
++	depends on HAS_IOMEM && HAVE_CLK
++	depends on SOC_IMX25 || COMPILE_TEST
+ 	default HW_RANDOM
+ 	---help---
+ 	  This driver provides kernel-side support for the Random Number
+-- 
+2.20.1
+
