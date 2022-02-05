@@ -1,0 +1,37 @@
+From 9d0f89074121fe4110b6e67c5f7dc481ecc1b948 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Horia=20Geant=C4=83?= <horia.geanta@nxp.com>
+Date: Wed, 15 Jul 2020 18:26:04 +0300
+Subject: [PATCH 3/3] hwrng: imx-rngc - enable driver for i.MX6
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+i.MX6 SL, SLL, ULL, ULZ SoCs have an RNGB block.
+
+Since imx-rngc driver supports also rngb,
+let's enable it for these SoCs too.
+
+Signed-off-by: Horia Geantă <horia.geanta@nxp.com>
+Reviewed-by: Martin Kaiser <martin@kaiser.cx>
+Reviewed-by: Marco Felsch <m.felsch@pengutronix.de>
+Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+---
+ drivers/char/hw_random/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/char/hw_random/Kconfig b/drivers/char/hw_random/Kconfig
+index 7b4b100f1c99..8e97676a9bba 100644
+--- a/drivers/char/hw_random/Kconfig
++++ b/drivers/char/hw_random/Kconfig
+@@ -245,7 +245,7 @@ config HW_RANDOM_MXC_RNGA
+ config HW_RANDOM_IMX_RNGC
+ 	tristate "Freescale i.MX RNGC Random Number Generator"
+ 	depends on HAS_IOMEM && HAVE_CLK
+-	depends on SOC_IMX25 || COMPILE_TEST
++	depends on SOC_IMX25 || SOC_IMX6SL || SOC_IMX6SLL || SOC_IMX6UL || COMPILE_TEST
+ 	default HW_RANDOM
+ 	---help---
+ 	  This driver provides kernel-side support for the Random Number
+-- 
+2.20.1
+
