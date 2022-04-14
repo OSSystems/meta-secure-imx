@@ -167,6 +167,7 @@ EOF
 # 
 csf_assemble() {
 	blocks="$(sed -n 's/HAB Blocks:[\t ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)[ ]\+\(0x[0-9a-f]\+\)/\1 \2 \3/p' ${2}.log)"
+	[ -z "${blocks}" ] && bbfatal "HAB block info not found in log. Did you enable CONFIG_IMX_HAB in u-boot config ?"
 	csf_emit_file "${1}" "${SRKTAB}" "${CSFK}" "${SIGN_CERT}" "${blocks}" "${2}" "${CRYPTO_HW_ACCEL}"
 }
 
