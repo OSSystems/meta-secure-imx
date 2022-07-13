@@ -23,6 +23,7 @@ set_bd_path() {
 	else
 		bd=${B}
 	fi
+	bd=${B}
 }
 
 # $1 ... fit image name
