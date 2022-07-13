@@ -425,6 +425,12 @@ sign_uboot_binman() {
 		set_variables
 		sign_all_spl
 
+		# New u-boot generates just one file with binman,
+		# there is no need to sign multiple files
+		if [ "x${UBOOT_SIGN_SPL_ONLY}" = "x1" ];then
+			return
+		fi
+
 		# create helper script for aligning address
 		get_align_size_emit_file ${bd}/get_align_size.pl
 
@@ -511,7 +517,7 @@ deploy_fit() {
 	if [ -n "${UBOOT_CONFIG}" ];then
 		bbwarn "do_deploy with UBOOT_CONFIG not implemented yet, please add."
 	else
-		install -D -m 644 ${bd}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX}
+		#install -D -m 644 ${bd}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${UBOOT_BINARY}.${UBOOT_SIGN_SUFFIX}
 		if [ -n "${SPL_BINARY}" ]; then
 			bbnote "install ${B}/${SPL_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX}"
 			install -m 644 ${B}/${SPL_BINARY}.${UBOOT_SIGN_SUFFIX} ${DEPLOYDIR}/${SPL_IMAGE}.${UBOOT_SIGN_SUFFIX}
